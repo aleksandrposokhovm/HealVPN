@@ -5,7 +5,7 @@ def main_menu():
         [InlineKeyboardButton("💎 Тарифы", callback_data="tariffs")],
         [InlineKeyboardButton("👤 Мой профиль", callback_data="profile")],
         [InlineKeyboardButton("⚙️ Как подключить", callback_data="instructions")],
-        [InlineKeyboardButton("🆘 Поддержка", url="https://t.me/your_support_handle")]
+        [InlineKeyboardButton("🆘 Поддержка", url="https://t.me/P777MP77")]
     ]
     return InlineKeyboardMarkup(keyboard)
 

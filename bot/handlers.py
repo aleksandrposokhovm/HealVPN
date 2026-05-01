@@ -15,39 +15,84 @@ DOWNLOADS_DIR = "downloads"
 if not os.path.exists(DOWNLOADS_DIR):
     os.makedirs(DOWNLOADS_DIR)
 
+LOGO_PATH = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "website", "assets", "logo_horizontal.png"
+))
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await db.add_user(user.id, user.username, user.full_name)
-    
-    await update.message.reply_text(
-        f"Привет, {user.full_name}! 👋\n\n"
-        "Добро пожаловать в **HealVPN**. Мы обеспечиваем быстрый и безопасный доступ к интернету с функцией раздельного туннелирования.\n\n"
-        "Выбери действие ниже:",
-        reply_markup=kb.main_menu(),
-        parse_mode=constants.ParseMode.MARKDOWN
+
+    welcome_text = (
+        "Вижу твой интерес! 👋 Позволь рассказать, почему HealVPN станет твоим лучшим выбором:\n\n"
+        "⚡️ Скорость — мгновенная загрузка любого контента.\n"
+        "🛡 Приватность — защита данных от слежки в любой сети.\n"
+        "🌐 Доступ — стабильная связь с глобальными ресурсами.\n"
+        "🖥 Надёжность — работа 24/7 и подключение в одно касание.\n"
+        "🧬 Раздельное туннелирование — банки и сервисы РФ работают без выключения VPN.\n"
+        "💸 Честность — единая цена без лимитов по трафику.\n\n"
+        "Ваш интернет под надёжной защитой. Жми кнопку ниже и лети! 🚀"
     )
+
+
+
+    if os.path.exists(LOGO_PATH):
+        try:
+            with open(LOGO_PATH, 'rb') as photo:
+                await update.message.reply_photo(
+                    photo=photo,
+                    caption=welcome_text,
+                    reply_markup=kb.main_menu(),
+                    parse_mode=constants.ParseMode.MARKDOWN,
+                )
+            print("DEBUG: reply_photo successful")
+        except Exception as e:
+            print(f"DEBUG: Error sending photo: {e}")
+            await update.message.reply_text(
+                welcome_text,
+                reply_markup=kb.main_menu(),
+                parse_mode=constants.ParseMode.MARKDOWN,
+            )
+    else:
+        print("DEBUG: LOGO_PATH does not exist, falling back to text")
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=kb.main_menu(),
+            parse_mode=constants.ParseMode.MARKDOWN,
+        )
+
 
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(
-        "Главное меню:",
-        reply_markup=kb.main_menu()
-    )
+    
+    text = "Главное меню:"
+    reply_markup = kb.main_menu()
+    
+    if query.message.photo:
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup)
+    else:
+        await query.edit_message_text(text=text, reply_markup=reply_markup)
 
 async def tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(
+    
+    text = (
         "💳 **Наши тарифы:**\n\n"
         "🔹 **Стандарт**\n"
         "— 1 месяц доступа\n"
-        "— Все локации\n"
-        "— Раздельное туннелирование\n"
-        "— Цена: **150 рублей**",
-        reply_markup=kb.tariffs_menu(),
-        parse_mode=constants.ParseMode.MARKDOWN
+        "— Стабильный сервер в Финляндии (Хельсинки)\n"
+        "— Подключайте все свои устройства к одной подписке\n"
+        "— Цена: **150 рублей**"
     )
+    reply_markup = kb.tariffs_menu()
+    
+    if query.message.photo:
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
+    else:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
 
 async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -72,25 +117,45 @@ async def profile_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     await query.answer()
-    await query.edit_message_text(
-        text, 
-        reply_markup=kb.back_to_main(), 
-        parse_mode=constants.ParseMode.MARKDOWN
-    )
+    if query.message.photo:
+        await query.edit_message_caption(
+            caption=text, 
+            reply_markup=kb.back_to_main(), 
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
+    else:
+        await query.edit_message_text(
+            text=text, 
+            reply_markup=kb.back_to_main(), 
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
 
 async def instructions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(
+    
+    text = (
         "⚙️ **Как подключить HealVPN:**\n\n"
         "1. Скачайте приложение [WireGuard](https://www.wireguard.com/install/) или [Outline](https://getoutline.org/).\n"
         "2. Скопируйте ваш ключ из раздела «Мой профиль».\n"
         "3. Добавьте новый сервер в приложении, используя ваш ключ.\n"
-        "4. Включите VPN и наслаждайтесь свободным интернетом!",
-        reply_markup=kb.back_to_main(),
-        parse_mode=constants.ParseMode.MARKDOWN,
-        disable_web_page_preview=True
+        "4. Включите VPN и наслаждайтесь свободным интернетом!"
     )
+    reply_markup = kb.back_to_main()
+    
+    if query.message.photo:
+        await query.edit_message_caption(
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode=constants.ParseMode.MARKDOWN,
+        )
+    else:
+        await query.edit_message_text(
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=constants.ParseMode.MARKDOWN,
+            disable_web_page_preview=True
+        )
 
 async def buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
