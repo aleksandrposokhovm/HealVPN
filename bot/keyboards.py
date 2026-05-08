@@ -3,7 +3,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 def main_menu():
     keyboard = [
         [InlineKeyboardButton("💳 Приобрести подписку", callback_data="tariffs", style="success")],
-        [InlineKeyboardButton("⚙️ Управление подпиской", callback_data="subscription_mgmt", style="success")]
+        [InlineKeyboardButton("⚙️ Управление подпиской", callback_data="subscription_mgmt", style="success")],
+        [InlineKeyboardButton("ℹ️ Информация о нас", callback_data="about")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -41,6 +42,13 @@ def instruction_menu():
 
 def back_to_main():
     keyboard = [
+        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+def about_menu():
+    keyboard = [
+        [InlineKeyboardButton("📢 Наш канал", url="https://t.me/HealVPN")],
+        [InlineKeyboardButton("👤 Связаться с менеджером", url="https://t.me/P777MP77")],
         [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(keyboard)

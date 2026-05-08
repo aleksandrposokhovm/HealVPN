@@ -170,25 +170,21 @@ async def subscription_mgmt_callback(update: Update, context: ContextTypes.DEFAU
         days_left = (end_dt - datetime.now()).days
         if days_left < 0: days_left = 0
 
-        status_text = "✅ **Подписка активна**" if active else "❌ **Подписка не активна**"
-
         text = (
-            f"👤 **Управление подпиской**\n\n"
-            f"📊 Статус: {status_text}\n"
+            f"✅ **У вас активна подписка**\n\n"
             f"📅 Осталось дней: `{days_left}`\n"
             f"📱 Доступно устройств: `10`\n\n"
             f"🔑 Ваш ключ: `{key}`"
         )
+        reply_markup = kb.subscription_management_menu()
     else:
         text = (
-            f"👤 **Управление подпиской**\n\n"
-            f"❌ **Подписка не активна**\n\n"
-            "Оформите подписку, чтобы получить доступ к серверам HealVPN."
+            f"❌ **У вас нет активной подписки**\n\n"
+            "Выберите количество устройств для оформления подписки и получения доступа к HealVPN:"
         )
+        reply_markup = kb.tariffs_menu()
 
     await query.answer()
-    reply_markup = kb.subscription_management_menu()
-
     if query.message.photo:
         await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
     else:
@@ -304,7 +300,7 @@ async def about_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Поддержка 24/7\n\n"
         "Мы используем современные протоколы шифрования, чтобы ваши данные оставались в безопасности."
     )
-    await query.edit_message_caption(caption=text, reply_markup=kb.back_to_main(), parse_mode=constants.ParseMode.MARKDOWN) if query.message.photo else await query.edit_message_text(text=text, reply_markup=kb.back_to_main(), parse_mode=constants.ParseMode.MARKDOWN)
+    await query.edit_message_caption(caption=text, reply_markup=kb.about_menu(), parse_mode=constants.ParseMode.MARKDOWN) if query.message.photo else await query.edit_message_text(text=text, reply_markup=kb.about_menu(), parse_mode=constants.ParseMode.MARKDOWN)
 
 async def auto_check_payment(context: ContextTypes.DEFAULT_TYPE):
     job = context.job

@@ -14,7 +14,8 @@ from handlers import (
     save_voice,
     save_document,
     save_photo,
-    copy_key_callback
+    copy_key_callback,
+    about_callback
 )
 from database import init_db
 
@@ -42,6 +43,7 @@ def main():
     app.add_handler(CallbackQueryHandler(subscription_mgmt_callback, pattern="^subscription_mgmt$"))
     app.add_handler(CallbackQueryHandler(instruction_callback, pattern="^instruction$"))
     app.add_handler(CallbackQueryHandler(copy_key_callback, pattern="^copy_key$"))
+    app.add_handler(CallbackQueryHandler(about_callback, pattern="^about$"))
 
     # Media and Text handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_text))
