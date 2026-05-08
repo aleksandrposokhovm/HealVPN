@@ -5,15 +5,16 @@ from handlers import (
     start, 
     main_menu_callback, 
     tariffs_callback, 
-    profile_callback, 
-    instructions_callback, 
-    buy_callback,
+    devices_callback,
+    subscription_mgmt_callback,
+    instruction_callback,
     help_cmd,
     status,
     save_text,
     save_voice,
     save_document,
-    save_photo
+    save_photo,
+    copy_key_callback
 )
 from database import init_db
 
@@ -37,9 +38,10 @@ def main():
     # Callbacks
     app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$"))
     app.add_handler(CallbackQueryHandler(tariffs_callback, pattern="^tariffs$"))
-    app.add_handler(CallbackQueryHandler(profile_callback, pattern="^profile$"))
-    app.add_handler(CallbackQueryHandler(instructions_callback, pattern="^instructions$"))
-    app.add_handler(CallbackQueryHandler(buy_callback, pattern="^buy_1_month$"))
+    app.add_handler(CallbackQueryHandler(devices_callback, pattern="^devices_10$"))
+    app.add_handler(CallbackQueryHandler(subscription_mgmt_callback, pattern="^subscription_mgmt$"))
+    app.add_handler(CallbackQueryHandler(instruction_callback, pattern="^instruction$"))
+    app.add_handler(CallbackQueryHandler(copy_key_callback, pattern="^copy_key$"))
 
     # Media and Text handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_text))
