@@ -5,11 +5,14 @@ class Settings(BaseSettings):
     BOT_TOKEN: SecretStr
     YOOKASSA_SHOP_ID: str
     YOOKASSA_SECRET_KEY: SecretStr
-    GROQ_API_KEY: SecretStr
     
     # VPN Server settings (to be filled later)
     VPN_SERVER_IP: str = ""
     VPN_API_URL: str = ""
+    
+    # Supabase settings
+    SUPABASE_URL: str
+    SUPABASE_KEY: SecretStr
     
     DB_NAME: str = "healvpn.db"
 

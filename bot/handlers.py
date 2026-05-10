@@ -1,22 +1,49 @@
+import asyncio
 from telegram import Update, constants
 from telegram.ext import ContextTypes
 import keyboards as kb
 import database as db
 import os
 from datetime import datetime
-from groq import Groq
 from config import config
-from yookassa import Configuration, Payment
+import httpx
+import base64
+import json
 import uuid
 import secrets
 import string
+import time
+import logging
 
-# YuKassa Configuration
-Configuration.account_id = config.YOOKASSA_SHOP_ID
-Configuration.secret_key = config.YOOKASSA_SECRET_KEY.get_secret_value()
+# Optimized Persistent HTTP client with connection pooling and timeouts
+_http_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(5.0, connect=2.0),
+    limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
+    headers={"Connection": "keep-alive"}
+)
 
-# Initialize Groq client
-groq_client = Groq(api_key=config.GROQ_API_KEY.get_secret_value())
+async def get_http_client():
+    global _http_client
+    if _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0, connect=2.0),
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)
+        )
+    return _http_client
+
+_yookassa_headers = None
+
+def get_yookassa_headers():
+    global _yookassa_headers
+    if _yookassa_headers is None:
+        auth_str = f"{config.YOOKASSA_SHOP_ID}:{config.YOOKASSA_SECRET_KEY.get_secret_value()}"
+        auth_bytes = auth_str.encode('ascii')
+        base64_auth = base64.b64encode(auth_bytes).decode('ascii')
+        _yookassa_headers = {
+            "Authorization": f"Basic {base64_auth}",
+            "Content-Type": "application/json"
+        }
+    return _yookassa_headers
 
 # Directory for saved files
 DOWNLOADS_DIR = "downloads"
@@ -28,10 +55,26 @@ LOGO_PATH = os.path.normpath(os.path.join(
     "..", "website", "assets", "logo_horizontal.png"
 ))
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await db.add_user(user.id, user.username, user.full_name)
+# Cache for Telegram file_id to speed up sending
+LOGO_FILE_ID = None
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global LOGO_FILE_ID
+    user = update.effective_user
+    logging.info(f"DEBUG: Start handler triggered by user {user.id} ({user.username})")
+    
+    # Run DB tasks in parallel
+    start_time = time.time()
+    db_tasks = [
+        db.add_user(user.id, user.username, user.first_name),
+        db.get_user_subscription(user.id)
+    ]
+    try:
+        _, sub = await asyncio.gather(*db_tasks)
+    except Exception as e:
+        logging.error(f"Error in start handler DB tasks: {e}")
+        sub = None
+    
     welcome_text = (
         "Вижу твой интерес! 👋 Позволь рассказать, почему HealVPN станет твоим лучшим выбором:\n\n"
         "⚡️ **Скорость** — мгновенная загрузка любого контента.\n"
@@ -41,41 +84,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Ваш интернет под надёжной защитой. Жми кнопку ниже и лети! 🚀"
     )
 
+    is_active = sub[3] if sub else False
+    reply_markup = kb.main_menu(is_active=is_active)
 
-
-    if os.path.exists(LOGO_PATH):
+    if os.path.exists(LOGO_PATH) or LOGO_FILE_ID:
         try:
-            with open(LOGO_PATH, 'rb') as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=welcome_text,
-                    reply_markup=kb.main_menu(),
-                    parse_mode=constants.ParseMode.MARKDOWN,
-                )
-            print("DEBUG: reply_photo successful")
-        except Exception as e:
-            print(f"DEBUG: Error sending photo: {e}")
-            await update.message.reply_text(
-                welcome_text,
-                reply_markup=kb.main_menu(),
+            photo_to_send = LOGO_FILE_ID if LOGO_FILE_ID else open(LOGO_PATH, 'rb')
+            sent_msg = await update.message.reply_photo(
+                photo=photo_to_send,
+                caption=welcome_text,
+                reply_markup=reply_markup,
                 parse_mode=constants.ParseMode.MARKDOWN,
             )
+            if not LOGO_FILE_ID:
+                LOGO_FILE_ID = sent_msg.photo[-1].file_id
+                if hasattr(photo_to_send, 'close'):
+                    photo_to_send.close()
+        except Exception as e:
+            await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
     else:
-        print("DEBUG: LOGO_PATH does not exist, falling back to text")
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=kb.main_menu(),
-            parse_mode=constants.ParseMode.MARKDOWN,
-        )
-
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
+    logging.info(f"DEBUG: Start took {time.time() - start_time:.2f}s")
 
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
+    
+    sub = await db.get_user_subscription(query.from_user.id)
+    is_active = sub[3] if sub else False
     text = "Главное меню:"
-    reply_markup = kb.main_menu()
-
+    reply_markup = kb.main_menu(is_active=is_active)
+    
     if query.message.photo:
         await query.edit_message_caption(caption=text, reply_markup=reply_markup)
     else:
@@ -84,10 +123,8 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     text = "💳 **Выберите количество устройств:**"
     reply_markup = kb.tariffs_menu()
-
     if query.message.photo:
         await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
     else:
@@ -96,346 +133,138 @@ async def tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def devices_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
+    payment_data = {
+        "amount": {"value": "111.00", "currency": "RUB"},
+        "confirmation": {"type": "redirect", "return_url": f"https://t.me/{context.bot.username}"},
+        "capture": True,
+        "description": f"Подписка HealVPN на 1 месяц для пользователя {query.from_user.id}",
+        "metadata": {"user_id": str(query.from_user.id), "plan": "1_month"}
+    }
 
-    text = (
-        "🚀 **Тариф: 10 устройств**\n\n"
-        "Доступ на 1 месяц для 10 ваших устройств.\n"
-        "Цена: **111 рублей**"
-    )
-    # Create payment and provide direct payment URL keyboard
     try:
-        payment = Payment.create({
-            "amount": {"value": "111.00", "currency": "RUB"},
-            "confirmation": {"type": "redirect", "return_url": f"https://t.me/{context.bot.username}"},
-            "capture": True,
-            "description": f"Подписка HealVPN на 1 месяц для пользователя {query.from_user.id}",
-            "metadata": {"user_id": query.from_user.id, "plan": "1_month"}
-        }, uuid.uuid4())
-        payment_url = payment.confirmation.confirmation_url
-        payment_id = payment.id
-        # Edit message to show payment info with direct URL button
-        text = (
-            "💳 **Оплата подписки**\n\n"
-            "Тариф: **Стандарт (1 месяц)**\n"
-            "Сумма: **111 рублей**\n\n"
-            "Нажмите кнопку ниже, чтобы перейти к оплате. Оплата будет проверена автоматически сразу после завершения платежа."
-        )
-        sent_message = await query.edit_message_caption(
-            caption=text,
-            reply_markup=kb.pay_menu(payment_url),
-            parse_mode=constants.ParseMode.MARKDOWN,
-        )
-        # Schedule automatic payment check
-        context.job_queue.run_repeating(
-            auto_check_payment,
-            interval=2,
-            first=2,
-            data={
-                "payment_id": payment_id,
-                "user_id": query.from_user.id,
-                "chat_id": query.message.chat_id,
-                "message_id": sent_message.message_id,
-            },
-            name=f"check_{payment_id}"
-        )
+        headers = get_yookassa_headers().copy()
+        headers["Idempotence-Key"] = str(uuid.uuid4())
+        client = await get_http_client()
+        
+        # Async YooKassa call
+        response = await client.post("https://api.yookassa.ru/v3/payments", json=payment_data, headers=headers)
+        payment = response.json()
+        
+        if "id" not in payment:
+            raise Exception(f"Failed to create payment: {payment}")
+            
+        context.user_data['pending_pay_id'] = payment['id']
+        context.user_data['pending_pay_url'] = payment["confirmation"]["confirmation_url"]
+        
+        text = "💳 **Оплата подписки**\n\nПосле завершения оплаты в браузере нажмите кнопку «Проверить оплату»."
+        reply_markup = kb.pay_menu(payment["confirmation"]["confirmation_url"], payment['id'])
+        
+        if query.message.photo:
+            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
+        else:
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
+            
     except Exception as e:
-        print(f"Error creating payment: {e}")
-        await query.edit_message_caption(
-            caption="❌ Произошла ошибка при создании платежа. Попробуйте позже или обратитесь в поддержку.",
-            reply_markup=kb.back_to_main()
-        )
-        return
-
-    return
+        print(f"Error in devices_callback: {e}")
+        error_text = "❌ Произошла ошибка. Попробуйте еще раз."
+        if query.message.photo:
+            await query.edit_message_caption(caption=error_text, reply_markup=kb.back_to_main())
+        else:
+            await query.edit_message_text(text=error_text, reply_markup=kb.back_to_main())
 
 async def subscription_mgmt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
-    sub = await db.get_user_subscription(user_id)
-
-    if sub:
-        plan, end_date, key, active = sub
-        # Calculate days remaining
-        if isinstance(end_date, str):
-            try:
-                if "." in end_date:
-                    end_dt = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S.%f")
-                else:
-                    end_dt = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                end_dt = datetime.fromisoformat(end_date)
-        else:
-            end_dt = end_date
-
-        days_left = (end_dt - datetime.now()).days
-        if days_left < 0: days_left = 0
-
-        text = (
-            f"✅ **У вас активна подписка**\n\n"
-            f"📅 Осталось дней: `{days_left}`\n"
-            f"📱 Доступно устройств: `10`\n\n"
-            f"🔑 Ваш ключ: `{key}`"
-        )
-        reply_markup = kb.subscription_management_menu()
-    else:
-        text = (
-            f"❌ **У вас нет активной подписки**\n\n"
-            "Выберите количество устройств для оформления подписки и получения доступа к HealVPN:"
-        )
-        reply_markup = kb.tariffs_menu()
-
     await query.answer()
+    sub = await db.get_user_subscription(query.from_user.id)
+    
+    if sub and sub[3]:
+        plan, end_date_str, key, active, devices = sub
+        from datetime import timezone
+        end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00')) if isinstance(end_date_str, str) else end_date_str
+        if end_dt.tzinfo is None: end_dt = end_dt.replace(tzinfo=timezone.utc)
+        delta = end_dt - datetime.now(timezone.utc)
+        text = f"✅ **Активна подписка**\n📅 Осталось: `{max(0, delta.days)} дн.`\n🔑 Ключ доступен ниже."
+        reply_markup = kb.subscription_management_menu(key=key)
+    else:
+        text = "❌ **Нет активной подписки**"
+        reply_markup = kb.tariffs_menu()
+        
     if query.message.photo:
         await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
     else:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
 
+
+async def check_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    payment_id = query.data.split(":")[1]
+    user_id = query.from_user.id
+    try:
+        await query.answer("Проверяю... ⏳")
+    except Exception as e:
+        logging.error(f"Error answering callback query: {e}")
+
+    try:
+        headers = get_yookassa_headers()
+        client = await get_http_client()
+        response = await client.get(f"https://api.yookassa.ru/v3/payments/{payment_id}", headers=headers)
+        payment = response.json()
+        
+        logging.info(f"Payment status for {payment_id}: {payment.get('status')}")
+        
+        if payment.get('status') == 'succeeded':
+            new_key = "ss://" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32)) + "@123.123.123.123:1234/?outline=1"
+            await db.activate_subscription(user_id, "Стандарт", 30, new_key)
+            success_text = "✨ **Оплата прошла успешно!**\nВаша подписка активирована. 🚀"
+            reply_markup = kb.success_payment_menu(new_key)
+            if query.message.photo:
+                await query.edit_message_caption(caption=success_text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
+            else:
+                await query.edit_message_text(text=success_text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
+        else:
+            await query.answer("Оплата еще не поступила. ⌛", show_alert=True)
+    except Exception as e:
+        logging.error(f"Error in check_payment_callback: {e}", exc_info=True)
+        await query.answer("Ошибка при проверке. Пожалуйста, обратитесь в поддержку.", show_alert=True)
+
 async def copy_key_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
-    sub = await db.get_user_subscription(user_id)
-
-    if sub:
-        plan, end_date, key, active = sub
+    sub = await db.get_user_subscription(query.from_user.id)
+    if sub and sub[3]:
         await query.answer("Ключ скопирован!", show_alert=True)
-        # Send the key in a separate message with mono font for easy copying
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=f"Ваш ключ (нажмите, чтобы скопировать):\n\n`{key}`",
-            parse_mode=constants.ParseMode.MARKDOWN
-        )
+        await context.bot.send_message(chat_id=query.message.chat_id, text=f"Ваш ключ:\n\n`{sub[2]}`", parse_mode=constants.ParseMode.MARKDOWN)
     else:
-        await query.answer("У вас нет активного ключа", show_alert=True)
+        await query.answer("Ключ не найден", show_alert=True)
 
 async def instruction_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    text = (
-        "📖 **Инструкция по подключению**\n\n"
-        "1. Скачайте приложение **Outline** или **WireGuard**.\n"
-        "2. Скопируйте ваш ключ из раздела управления подпиской.\n"
-        "3. В приложении нажмите «Добавить сервер» и вставьте ключ.\n"
-        "4. Нажмите «Подключиться».\n\n"
-        "Если у вас возникли вопросы, обратитесь в поддержку: @P777MP77"
-    )
-    reply_markup = kb.instruction_menu()
-
+    text = "📖 **Инструкция**\n1. Скачайте Outline.\n2. Вставьте ключ.\nГотово! ✅"
     if query.message.photo:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
+        await query.edit_message_caption(caption=text, reply_markup=kb.instruction_menu(), parse_mode=constants.ParseMode.MARKDOWN)
     else:
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=constants.ParseMode.MARKDOWN)
-
-async def connect_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    text = (
-        "🔗 **Как подключиться?**\n\n"
-        "1. Скопируйте ваш ключ из раздела профиля.\n"
-        "2. Установите приложение **Outline**.\n"
-        "3. Добавьте новый сервер и вставьте ключ.\n\n"
-        "Если возникли сложности, обратитесь в поддержку."
-    )
-    if query.message.photo:
-        await query.edit_message_caption(caption=text, reply_markup=kb.back_to_main(), parse_mode=constants.ParseMode.MARKDOWN)
-    else:
-        await query.edit_message_text(text=text, reply_markup=kb.back_to_main(), parse_mode=constants.ParseMode.MARKDOWN)
-
-async def my_devices_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    text = "📱 **Ваши устройства**\n\nПо вашей подписке доступно одновременное подключение до **10 устройств**."
-    if query.message.photo:
-        await query.edit_message_caption(caption=text, reply_markup=kb.back_to_main(), parse_mode=constants.ParseMode.MARKDOWN)
-    else:
-        await query.edit_message_text(text=text, reply_markup=kb.back_to_main(), parse_mode=constants.ParseMode.MARKDOWN)
-
-async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    text = (
-        "📢 **Инструкция и поддержка**\n\n"
-        "⚙️ **Как подключить:**\n"
-        "1. Скачайте приложение [WireGuard](https://www.wireguard.com/install/) или [Outline](https://getoutline.org/).\n"
-        "2. Скопируйте ваш ключ из раздела «Мой профиль».\n"
-        "3. Добавьте новый сервер в приложении.\n\n"
-        "🆘 **Поддержка:**\n"
-        "Если у вас возникли вопросы, пишите нашему администратору: @P777MP77"
-    )
-    reply_markup = kb.back_to_main()
-
-    if query.message.photo:
-        await query.edit_message_caption(
-            caption=text,
-            reply_markup=reply_markup,
-            parse_mode=constants.ParseMode.MARKDOWN,
-        )
-    else:
-        await query.edit_message_text(
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=constants.ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
-
-async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    text = (
-        "🔥 **Реферальная программа**\n\n"
-        "Приглашайте друзей и получайте бонусы! 🎁\n"
-        "Ваша реферальная ссылка: (в разработке)\n\n"
-        "За каждого приведенного друга вы получите 15 дней бесплатного доступа."
-    )
-    await query.edit_message_caption(caption=text, reply_markup=kb.back_to_main(), parse_mode=constants.ParseMode.MARKDOWN) if query.message.photo else await query.edit_message_text(text=text, reply_markup=kb.back_to_main(), parse_mode=constants.ParseMode.MARKDOWN)
+        await query.edit_message_text(text=text, reply_markup=kb.instruction_menu(), parse_mode=constants.ParseMode.MARKDOWN)
 
 async def about_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    text = (
-        "✦ **Информация о нас**\n\n"
-        "HealVPN — это проект, созданный для обеспечения свободного и безопасного доступа к информации.\n\n"
-        "✅ Высокая скорость\n"
-        "✅ Полная анонимность\n"
-        "✅ Поддержка 24/7\n\n"
-        "Мы используем современные протоколы шифрования, чтобы ваши данные оставались в безопасности."
-    )
-    await query.edit_message_caption(caption=text, reply_markup=kb.about_menu(), parse_mode=constants.ParseMode.MARKDOWN) if query.message.photo else await query.edit_message_text(text=text, reply_markup=kb.about_menu(), parse_mode=constants.ParseMode.MARKDOWN)
-
-async def auto_check_payment(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    payment_id = job.data["payment_id"]
-    user_id = job.data["user_id"]
-    chat_id = job.data["chat_id"]
-    message_id = job.data["message_id"]
-    
-    # Increment attempt counter
-    attempts = job.data.get("attempts", 0)
-    if attempts > 300:  # Stop after 10 minutes (300 * 2s)
-        job.schedule_removal()
-        return
-    job.data["attempts"] = attempts + 1
-
-    try:
-        payment = Payment.find_one(payment_id)
-
-        if payment.status == 'succeeded':
-            import secrets
-            import string
-            new_key = "ss://" + "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32)) + "@123.123.123.123:1234/?outline=1"
-            await db.activate_subscription(user_id, "Стандарт", 30, new_key)
-
-            success_text = (
-                "🎉 **Оплата прошла успешно!**\n\n"
-                "Ваша подписка на 1 месяц активирована.\n\n"
-                f"🔑 Ваш ключ доступа:\n`{new_key}`\n\n"
-                "Нажмите на ключ, чтобы скопировать его. Инструкции по подключению в разделе «Помощь»."
-            )
-
-            # Edit the original payment message
-            await context.bot.edit_message_caption(
-                chat_id=chat_id,
-                message_id=message_id,
-                caption=success_text,
-                reply_markup=kb.main_menu(),
-                parse_mode=constants.ParseMode.MARKDOWN
-            )
-
-            # Also send a fresh message so the user gets a notification
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=success_text,
-                reply_markup=kb.main_menu(),
-                parse_mode=constants.ParseMode.MARKDOWN
-            )
-            job.schedule_removal()
-        elif payment.status == 'canceled':
-            fail_text = "❌ **Оплата не прошла**, давай попробуем еще раз"
-            await context.bot.edit_message_caption(
-                chat_id=chat_id,
-                message_id=message_id,
-                caption=fail_text,
-                reply_markup=kb.tariffs_menu(),
-                parse_mode=constants.ParseMode.MARKDOWN
-            )
-            job.schedule_removal()
-    except Exception as e:
-        print(f"Error in auto_check_payment: {e}")
+    text = "ℹ️ **О нас**\nHealVPN — быстрый и анонимный сервис."
+    if query.message.photo:
+        await query.edit_message_caption(caption=text, reply_markup=kb.about_menu(), parse_mode=constants.ParseMode.MARKDOWN)
+    else:
+        await query.edit_message_text(text=text, reply_markup=kb.about_menu(), parse_mode=constants.ParseMode.MARKDOWN)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📖 **Справка**\n\n"
-        "/start — Главное меню\n"
-        "/status — Проверить статус подписки\n"
-        "/help — Показать это сообщение\n\n"
-        "Вы также можете отправить текст, фото, голос или документ для сохранения.",
-        parse_mode=constants.ParseMode.MARKDOWN
-    )
+    await update.message.reply_text("/start — Меню\n/status — Статус")
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    sub = await db.get_user_subscription(user_id)
-
-    if sub:
-        plan, end_date, key, active = sub
-        status_text = "✅ Активен" if active else "❌ Неактивен"
-        await update.message.reply_text(f"📊 Ваш статус: {status_text}\n📅 Истекает: {end_date}")
-    else:
-        await update.message.reply_text("📊 Подписка не найдена.")
+    sub = await db.get_user_subscription(update.effective_user.id)
+    await update.message.reply_text(f"Статус: {'Активен' if sub and sub[3] else 'Неактивен'}")
 
 async def save_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    await update.message.reply_text("Используйте кнопки меню!", reply_markup=kb.main_menu())
 
-    try:
-        # Show typing status
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
-        chat_completion = groq_client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": "Ты — помощник HealVPN. Отвечай вежливо и кратко."},
-                {"role": "user", "content": text}
-            ],
-            model="llama3-8b-8192",
-        )
-        response = chat_completion.choices[0].message.content
-        await update.message.reply_text(response)
-    except Exception as e:
-        print(f"Error in save_text: {e}")
-        await update.message.reply_text("Извините, я не смог обработать ваш запрос.")
-
-async def save_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        # Show typing status
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
-        file = await update.message.voice.get_file()
-        file_path = os.path.join(DOWNLOADS_DIR, f"voice_{update.effective_user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
-        await file.download_to_drive(file_path)
-
-        # Transcribe using Groq
-        with open(file_path, "rb") as file_data:
-            transcription = groq_client.audio.transcriptions.create(
-                file=(file_path, file_data.read()),
-                model="whisper-large-v3",
-                response_format="text",
-            )
-
-        await update.message.reply_text(f"🎤 **Расшифровка:**\n\n{transcription}", parse_mode=constants.ParseMode.MARKDOWN)
-
-    except Exception as e:
-        print(f"Error in save_voice: {e}")
-        await update.message.reply_text("Не удалось расшифровать голосовое сообщение.")
-
-async def save_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = await update.message.document.get_file()
-    file_path = os.path.join(DOWNLOADS_DIR, f"doc_{update.effective_user.id}_{update.message.document.file_name}")
-    await file.download_to_drive(file_path)
-    await update.message.reply_text(f"📄 Документ сохранен: {update.message.document.file_name}")
-
-async def save_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Get the largest photo
-    photo = update.message.photo[-1]
-    file = await photo.get_file()
-    file_path = os.path.join(DOWNLOADS_DIR, f"photo_{update.effective_user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
-    await file.download_to_drive(file_path)
-    await update.message.reply_text(f"📸 Фото сохранено.")
+async def save_voice(update: Update, context: ContextTypes.DEFAULT_TYPE): await save_text(update, context)
+async def save_document(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("Документ получен.")
+async def save_photo(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("Фото получено.")

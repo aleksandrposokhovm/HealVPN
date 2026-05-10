@@ -15,7 +15,8 @@ from handlers import (
     save_document,
     save_photo,
     copy_key_callback,
-    about_callback
+    about_callback,
+    check_payment_callback
 )
 from database import init_db
 
@@ -28,8 +29,13 @@ logging.basicConfig(
 async def post_init(application):
     await init_db()
 
+async def error_handler(update: object, context) -> None:
+    logging.error(msg="Exception while handling an update:", exc_info=context.error)
+
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).read_timeout(30).connect_timeout(30).build()
+    
+    app.add_error_handler(error_handler)
 
     # Commands
     app.add_handler(CommandHandler("start", start))
@@ -39,11 +45,12 @@ def main():
     # Callbacks
     app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$"))
     app.add_handler(CallbackQueryHandler(tariffs_callback, pattern="^tariffs$"))
-    app.add_handler(CallbackQueryHandler(devices_callback, pattern="^devices_10$"))
+    app.add_handler(CallbackQueryHandler(devices_callback, pattern="^devices_5$"))
     app.add_handler(CallbackQueryHandler(subscription_mgmt_callback, pattern="^subscription_mgmt$"))
     app.add_handler(CallbackQueryHandler(instruction_callback, pattern="^instruction$"))
     app.add_handler(CallbackQueryHandler(copy_key_callback, pattern="^copy_key$"))
     app.add_handler(CallbackQueryHandler(about_callback, pattern="^about$"))
+    app.add_handler(CallbackQueryHandler(check_payment_callback, pattern="^check_pay:"))
 
     # Media and Text handlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_text))
@@ -52,8 +59,9 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, save_photo))
 
     # Run the bot
-    print("Bot started...")
+    print("Bot started [VERSION 1.1]...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()

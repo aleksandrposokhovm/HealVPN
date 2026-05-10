@@ -3,4 +3,4 @@ python-dotenv
 yookassa
 aiosqlite
 pydantic-settings
-groq
+httpx
