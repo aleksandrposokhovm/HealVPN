@@ -1,0 +1,6 @@
+.DS_Store
+bot/.env
+bot/*.log
+bot/__pycache__/
+bot/healvpn.db
+bot/scratch/
