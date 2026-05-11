@@ -164,6 +164,11 @@ async def check_payment_callback(callback: CallbackQuery):
         headers = get_yookassa_headers()
         async with httpx.AsyncClient() as client:
             response = await client.get(f"https://api.yookassa.ru/v3/payments/{payment_id}", headers=headers)
+            
+            if response.status_code != 200:
+                logging.error(f"YooKassa API Error: {response.status_code} - {response.text}")
+                response.raise_for_status()
+                
             payment = response.json()
         
         if payment.get('status') == 'succeeded':

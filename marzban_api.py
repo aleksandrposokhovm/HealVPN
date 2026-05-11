@@ -58,10 +58,7 @@ class MarzbanAPI:
         payload = {
             "username": username,
             "proxies": {"vless": {}, "vmess": {}},
-            "inbounds": {
-                "vless": ["VLESS TCP REALITY", "VLESS GRPC REALITY"],
-                "vmess": ["VMess TCP", "VMess Websocket"],
-            },
+            "inbounds": {},
             "data_limit": data_limit,
             "expire": expire,
             "data_limit_reset_strategy": "no_reset",

@@ -62,8 +62,11 @@ async def activate_subscription(user_id: int, plan_name: str, duration_days: int
         user = result.scalars().first()
         
         if not user:
-            logging.error(f"Cannot activate sub for {user_id}: User not found in DB.")
-            return
+            # Auto-create the user if they were missing from the DB
+            user = User(id=user_id, username=str(user_id), first_name="User")
+            session.add(user)
+            await session.commit() # Commit to ensure it exists
+            # We don't return here, we proceed to activate
             
         now = datetime.now(timezone.utc)
         
