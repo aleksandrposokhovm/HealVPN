@@ -57,7 +57,7 @@ class MarzbanAPI:
 
         payload = {
             "username": username,
-            "proxies": {"vless": {}, "vmess": {}},
+            "proxies": {"vless": {}},
             "inbounds": {},
             "data_limit": data_limit,
             "expire": expire,
