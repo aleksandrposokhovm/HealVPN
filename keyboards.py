@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CopyTextButton
 
 def main_menu(is_active=False) -> InlineKeyboardMarkup:
     purchase_text = "💳 Продлить подписку" if is_active else "💳 Приобрести подписку"
@@ -22,8 +22,13 @@ def pay_menu(payment_url: str, payment_id: str) -> InlineKeyboardMarkup:
     ])
 
 def subscription_management_menu(key: str = None) -> InlineKeyboardMarkup:
+    copy_btn = (
+        InlineKeyboardButton(text="🔑 Скопировать ключ", copy_text=CopyTextButton(text=key))
+        if key
+        else InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")
+    )
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")],
+        [copy_btn],
         [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
     ])
@@ -40,7 +45,7 @@ def back_to_main() -> InlineKeyboardMarkup:
 
 def success_payment_menu(key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")],
+        [InlineKeyboardButton(text="🔑 Скопировать ключ", copy_text=CopyTextButton(text=key))],
         [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
         [InlineKeyboardButton(text="🔙 На главное меню", callback_data="main_menu")]
     ])
