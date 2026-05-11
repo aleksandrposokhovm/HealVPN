@@ -1,68 +1,55 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-def main_menu(is_active=False):
+def main_menu(is_active=False) -> InlineKeyboardMarkup:
     purchase_text = "💳 Продлить подписку" if is_active else "💳 Приобрести подписку"
-    keyboard = [
-        [InlineKeyboardButton(purchase_text, callback_data="tariffs", style="success")],
-        [InlineKeyboardButton("⚙️ Управление подпиской", callback_data="subscription_mgmt", style="success")],
-        [InlineKeyboardButton("ℹ️ Информация о нас", callback_data="about")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=purchase_text, callback_data="tariffs")],
+        [InlineKeyboardButton(text="⚙️ Управление подпиской", callback_data="subscription_mgmt")],
+        [InlineKeyboardButton(text="ℹ️ Информация о нас", callback_data="about")]
+    ])
 
-def tariffs_menu():
-    keyboard = [
-        [InlineKeyboardButton("📱 5 устройств", callback_data="devices_5", style="success")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def tariffs_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 5 устройств", callback_data="devices_5")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+    ])
 
+def pay_menu(payment_url: str, payment_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 Оплатить подписку на 1 месяц", url=payment_url)],
+        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_pay:{payment_id}")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="tariffs")]
+    ])
 
-def pay_menu(payment_url: str, payment_id: str):
-    keyboard = [
-        [InlineKeyboardButton("💳 Оплатить подписку на 1 месяц", url=payment_url, style="success")],
-        [InlineKeyboardButton("✅ Проверить оплату", callback_data=f"check_pay:{payment_id}", style="success")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="tariffs")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def subscription_management_menu(key: str = None) -> InlineKeyboardMarkup:
+    # Aiogram 3 doesn't have native CopyTextButton, usually we just send the key in markdown
+    # and users can tap to copy. Or use url if it's a URL.
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")],
+        [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+    ])
 
-from telegram import CopyTextButton
+def instruction_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="subscription_mgmt")]
+    ])
 
-def subscription_management_menu(key=None):
-    if key:
-        copy_btn = InlineKeyboardButton("🔑 Скопировать ключ", copy_text=CopyTextButton(text=key), style="success")
-    else:
-        copy_btn = InlineKeyboardButton("🔑 Скопировать ключ", callback_data="copy_key", style="success")
+def back_to_main() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+    ])
 
-    keyboard = [
-        [copy_btn],
-        [InlineKeyboardButton("📖 Инструкция по подключению", callback_data="instruction", style="success")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def success_payment_menu(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔑 Показать ключ", callback_data="copy_key")],
+        [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
+        [InlineKeyboardButton(text="🔙 На главное меню", callback_data="main_menu")]
+    ])
 
-def instruction_menu():
-    keyboard = [
-        [InlineKeyboardButton("🔙 Назад", callback_data="subscription_mgmt")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def back_to_main():
-    keyboard = [
-        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-def success_payment_menu(key):
-    keyboard = [
-        [InlineKeyboardButton("Скопировать ключ", copy_text=CopyTextButton(text=key), style="success")],
-        [InlineKeyboardButton("Инструкция по подключению", callback_data="instruction", style="success")],
-        [InlineKeyboardButton("На главное меню", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def about_menu():
-    keyboard = [
-        [InlineKeyboardButton("📢 Наш канал", url="https://t.me/HealVPN")],
-        [InlineKeyboardButton("👤 Связаться с менеджером", url="https://t.me/heal_vpn_support")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def about_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Наш канал", url="https://t.me/HealVPN")],
+        [InlineKeyboardButton(text="👤 Связаться с менеджером", url="https://t.me/heal_vpn_support")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+    ])

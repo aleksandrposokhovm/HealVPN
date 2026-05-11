@@ -10,11 +10,8 @@ class Settings(BaseSettings):
     VPN_SERVER_IP: str = ""
     VPN_API_URL: str = ""
     
-    # Supabase settings
-    SUPABASE_URL: str
-    SUPABASE_KEY: SecretStr
-    
-    DB_NAME: str = "healvpn.db"
+    # Database settings
+    DATABASE_URL: str
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
