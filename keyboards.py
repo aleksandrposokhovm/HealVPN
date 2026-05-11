@@ -22,8 +22,6 @@ def pay_menu(payment_url: str, payment_id: str) -> InlineKeyboardMarkup:
     ])
 
 def subscription_management_menu(key: str = None) -> InlineKeyboardMarkup:
-    # Aiogram 3 doesn't have native CopyTextButton, usually we just send the key in markdown
-    # and users can tap to copy. Or use url if it's a URL.
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")],
         [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
@@ -42,7 +40,7 @@ def back_to_main() -> InlineKeyboardMarkup:
 
 def success_payment_menu(key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Показать ключ", callback_data="copy_key")],
+        [InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")],
         [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
         [InlineKeyboardButton(text="🔙 На главное меню", callback_data="main_menu")]
     ])

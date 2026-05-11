@@ -17,7 +17,7 @@ router = Router()
 
 LOGO_PATH = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "..", "website", "assets", "logo_horizontal.png"
+    "assets", "logo_horizontal.png"
 ))
 LOGO_FILE_ID = None
 
@@ -172,12 +172,16 @@ async def check_payment_callback(callback: CallbackQuery):
             payment = response.json()
         
         if payment.get('status') == 'succeeded':
-            # Integrate with Marzban
+            # Calculate expiry: 30 days from now as unix timestamp
+            import time
+            days = 30
+            expire_ts = int(time.time()) + days * 24 * 3600
+
             marzban_username = str(user_id)
             user_response = await marzban_api.create_user(
                 username=marzban_username,
-                data_limit=0, # Unlimited
-                expire=0 # Expiration is handled by DB for now, but could be set in Marzban
+                data_limit=0,    # Unlimited traffic
+                expire=expire_ts # Exact expiry timestamp in Marzban
             )
             
             sub_url = ""
@@ -188,13 +192,12 @@ async def check_payment_callback(callback: CallbackQuery):
                 is_valid = await marzban_api.validate_subscription(sub_url)
                 if not is_valid:
                     logging.warning(f"Subscription URL for {marzban_username} failed health-check!")
-                    # We still continue but log it
             else:
                 logging.error(f"Failed to get subscription_url from Marzban for user {user_id}")
                 await callback.answer("Ошибка при создании VPN аккаунта. Обратитесь в поддержку.", show_alert=True)
                 return
 
-            await db.activate_subscription(user_id, "Стандарт", 30, sub_url)
+            await db.activate_subscription(user_id, "Стандарт", days, sub_url)
             
             success_text = "✨ *Оплата прошла успешно!*\nВаша подписка активирована. 🚀"
             reply_markup = kb.success_payment_menu(sub_url)
@@ -213,10 +216,15 @@ async def check_payment_callback(callback: CallbackQuery):
 async def copy_key_callback(callback: CallbackQuery):
     sub = await db.get_user_subscription(callback.from_user.id)
     if sub and sub[3]:
-        await callback.answer("Отправляю ключ...")
-        await callback.message.answer(f"Ваш ключ:\n\n`{sub[2]}`", parse_mode="Markdown")
+        key = sub[2]
+        # Send key as plain text so user can tap and copy it
+        await callback.message.answer(
+            f"🔑 Ваш VPN ключ — нажмите, чтобы скопировать:\n\n`{key}`",
+            parse_mode="Markdown"
+        )
+        await callback.answer()
     else:
-        await callback.answer("Ключ не найден", show_alert=True)
+        await callback.answer("Ключ не найден. Сначала оформите подписку.", show_alert=True)
 
 @router.callback_query(F.data == "instruction")
 async def instruction_callback(callback: CallbackQuery):
