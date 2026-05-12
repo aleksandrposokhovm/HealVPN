@@ -172,22 +172,41 @@ async def check_payment_callback(callback: CallbackQuery):
             payment = response.json()
         
         if payment.get('status') == 'succeeded':
-            # Calculate expiry: 30 days from now as unix timestamp
             import time
             days = 30
-            expire_ts = int(time.time()) + days * 24 * 3600
-
             marzban_username = str(user_id)
+
+            # Check existing subscription in DB to properly add days on renewal
+            existing_sub = await db.get_user_subscription(user_id)
+            now_utc = datetime.now(timezone.utc)
+
+            if existing_sub and existing_sub[3] and existing_sub[1]:
+                # Active subscription exists — extend from its current end date
+                sub_end = existing_sub[1]
+                if not sub_end.tzinfo:
+                    sub_end = sub_end.replace(tzinfo=timezone.utc)
+                # If subscription is somehow in the past, extend from now
+                base_ts = max(sub_end, now_utc)
+            else:
+                # New subscription — start from now
+                base_ts = now_utc
+
+            expire_ts = int(base_ts.timestamp()) + days * 24 * 3600
+
+            # Try to create user in Marzban (returns existing user on 409)
             user_response = await marzban_api.create_user(
                 username=marzban_username,
-                data_limit=0,    # Unlimited traffic
-                expire=expire_ts # Exact expiry timestamp in Marzban
+                data_limit=0,
+                expire=expire_ts
             )
-            
-            sub_url = ""
+
             if user_response and "subscription_url" in user_response:
                 sub_url = user_response["subscription_url"]
-                
+
+                # If user already existed (renewal case), update their expire in Marzban
+                if existing_sub and existing_sub[3]:
+                    await marzban_api.update_user_expire(marzban_username, expire_ts)
+
                 # Health-check
                 is_valid = await marzban_api.validate_subscription(sub_url)
                 if not is_valid:
@@ -197,11 +216,12 @@ async def check_payment_callback(callback: CallbackQuery):
                 await callback.answer("Ошибка при создании VPN аккаунта. Обратитесь в поддержку.", show_alert=True)
                 return
 
+            # Save to DB — activate_subscription already handles adding days correctly
             await db.activate_subscription(user_id, "Стандарт", days, sub_url)
-            
+
             success_text = "✨ *Оплата прошла успешно!*\nВаша подписка активирована. 🚀"
             reply_markup = kb.success_payment_menu(sub_url)
-            
+
             if callback.message.photo:
                 await callback.message.edit_caption(caption=success_text, reply_markup=reply_markup, parse_mode="Markdown")
             else:

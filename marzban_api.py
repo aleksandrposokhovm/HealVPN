@@ -105,6 +105,34 @@ class MarzbanAPI:
                 logging.error(f"Error getting user from Marzban: {e}")
                 return None
 
+    async def update_user_expire(self, username: str, expire_ts: int) -> bool:
+        """
+        Update the expiry timestamp for an existing Marzban user.
+        Called when a user renews their subscription to keep Marzban in sync.
+        """
+        token = await self.get_token()
+        if not token:
+            return False
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                response = await client.put(
+                    f"{self.base_url}/api/user/{username}",
+                    json={"expire": expire_ts, "status": "active"},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                logging.info(f"Updated Marzban expire for user {username} to {expire_ts}")
+                return True
+            except Exception as e:
+                logging.error(f"Error updating Marzban user expire for {username}: {e}")
+                return False
+
     async def validate_subscription(self, sub_url: str) -> bool:
         """
         Health-check: GET the subscription URL to verify it returns valid content.
