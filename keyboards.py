@@ -3,8 +3,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CopyTextBu
 def main_menu(is_active=False) -> InlineKeyboardMarkup:
     purchase_text = "💳 Продлить подписку" if is_active else "💳 Приобрести подписку"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=purchase_text, callback_data="tariffs")],
-        [InlineKeyboardButton(text="⚙️ Управление подпиской", callback_data="subscription_mgmt")],
+        [InlineKeyboardButton(text=purchase_text, callback_data="tariffs", **{"style": "success"})],
+        [InlineKeyboardButton(text="⚙️ Управление подпиской", callback_data="subscription_mgmt", **{"style": "success"})],
         [InlineKeyboardButton(text="ℹ️ Информация о нас", callback_data="about")]
     ])
 
@@ -16,16 +16,16 @@ def tariffs_menu() -> InlineKeyboardMarkup:
 
 def pay_menu(payment_url: str, payment_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 Оплатить подписку на 1 месяц", url=payment_url)],
-        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_pay:{payment_id}")],
+        [InlineKeyboardButton(text="💳 Оплатить подписку на 1 месяц", url=payment_url, **{"style": "success"})],
+        [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_pay:{payment_id}", **{"style": "success"})],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="tariffs")]
     ])
 
 def subscription_management_menu(key: str = None, auto_renew: bool = True, has_pm: bool = False) -> InlineKeyboardMarkup:
     copy_btn = (
-        InlineKeyboardButton(text="🔑 Скопировать ключ", copy_text=CopyTextButton(text=key))
+        InlineKeyboardButton(text="🔑 Скопировать ключ", copy_text=CopyTextButton(text=key), **{"style": "success"})
         if key
-        else InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")
+        else InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key", **{"style": "success"})
     )
     
     buttons = [
@@ -54,7 +54,7 @@ def back_to_main() -> InlineKeyboardMarkup:
 
 def success_payment_menu(key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 Скопировать ключ", copy_text=CopyTextButton(text=key))],
+        [InlineKeyboardButton(text="🔑 Скопировать ключ", copy_text=CopyTextButton(text=key), **{"style": "success"})],
         [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
         [InlineKeyboardButton(text="🔙 На главное меню", callback_data="main_menu")]
     ])
