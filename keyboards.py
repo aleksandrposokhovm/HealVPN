@@ -10,7 +10,7 @@ def main_menu(is_active=False) -> InlineKeyboardMarkup:
 
 def tariffs_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📱 5 устройств", callback_data="devices_5")],
+        [InlineKeyboardButton(text="📱 5 устройств", callback_data="devices_5", **{"style": "success"})],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
     ])
 
@@ -30,7 +30,7 @@ def subscription_management_menu(key: str = None, auto_renew: bool = True, has_p
     
     buttons = [
         [copy_btn],
-        [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
+        [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction", **{"style": "success"})],
     ]
     
     # Only show auto-renew toggle if user has a saved payment method
@@ -55,7 +55,7 @@ def back_to_main() -> InlineKeyboardMarkup:
 def success_payment_menu(key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Скопировать ключ", copy_text=CopyTextButton(text=key), **{"style": "success"})],
-        [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
+        [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction", **{"style": "success"})],
         [InlineKeyboardButton(text="🔙 На главное меню", callback_data="main_menu")]
     ])
 
