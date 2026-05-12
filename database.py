@@ -79,6 +79,7 @@ async def activate_subscription(user_id: int, plan_name: str, duration_days: int
         user.is_active = True
         user.vpn_key = vpn_key
         user.available_devices = 5
+        user.last_payment_date = now
         
         await session.commit()
         

@@ -23,4 +23,5 @@ class User(Base):
     auto_renew: Mapped[bool] = mapped_column(Boolean, default=True)
     failed_payments: Mapped[int] = mapped_column(Integer, default=0)
     
+    last_payment_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
