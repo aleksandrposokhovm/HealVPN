@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import BigInteger, String, Boolean, DateTime
+from sqlalchemy import BigInteger, String, Boolean, DateTime, Integer
 
 class Base(DeclarativeBase):
     pass
@@ -17,5 +17,10 @@ class User(Base):
     subscription_ends: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     vpn_key: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     available_devices: Mapped[int] = mapped_column(default=0)
+    
+    # Auto-renewal fields
+    payment_method_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=True)
+    failed_payments: Mapped[int] = mapped_column(Integer, default=0)
     
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

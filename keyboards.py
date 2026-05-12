@@ -21,17 +21,26 @@ def pay_menu(payment_url: str, payment_id: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔙 Назад", callback_data="tariffs")]
     ])
 
-def subscription_management_menu(key: str = None) -> InlineKeyboardMarkup:
+def subscription_management_menu(key: str = None, auto_renew: bool = True, has_pm: bool = False) -> InlineKeyboardMarkup:
     copy_btn = (
         InlineKeyboardButton(text="🔑 Скопировать ключ", copy_text=CopyTextButton(text=key))
         if key
         else InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key")
     )
-    return InlineKeyboardMarkup(inline_keyboard=[
+    
+    buttons = [
         [copy_btn],
         [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
-    ])
+    ]
+    
+    # Only show auto-renew toggle if user has a saved payment method
+    if has_pm:
+        status = "ВКЛ ✅" if auto_renew else "ВЫКЛ ❌"
+        buttons.append([InlineKeyboardButton(text=f"🔄 Автопродление: {status}", callback_data="toggle_auto_renew")])
+    
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def instruction_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[

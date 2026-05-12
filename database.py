@@ -94,7 +94,97 @@ async def deactivate_expired_subscriptions():
         users = result.scalars().all()
         for u in users:
             u.is_active = False
-            # We don't delete vpn_key so user can still see it in the panel, it's just disabled on Marzban side (Marzban handles its own expiration if set)
             if u.id in sub_cache:
                 del sub_cache[u.id]
         await session.commit()
+
+async def save_payment_method(user_id: int, payment_method_id: str):
+    """Save YooKassa payment method ID for auto-renewal."""
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
+        if user:
+            user.payment_method_id = payment_method_id
+            user.auto_renew = True
+            user.failed_payments = 0
+            await session.commit()
+            if user_id in sub_cache:
+                del sub_cache[user_id]
+
+async def toggle_auto_renew(user_id: int) -> bool:
+    """Toggle auto-renewal for user. Returns new state."""
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
+        if user:
+            user.auto_renew = not user.auto_renew
+            await session.commit()
+            if user_id in sub_cache:
+                del sub_cache[user_id]
+            return user.auto_renew
+    return False
+
+async def get_user_auto_renew_status(user_id: int) -> tuple:
+    """Returns (auto_renew: bool, has_payment_method: bool)."""
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
+        if user:
+            return (user.auto_renew, user.payment_method_id is not None)
+    return (False, False)
+
+async def get_users_for_auto_renew():
+    """Find users whose subscription expires within the next 24 hours and have auto-renew enabled."""
+    async with async_session() as session:
+        now = datetime.now(timezone.utc)
+        threshold = now + timedelta(hours=24)
+        result = await session.execute(
+            select(User).where(
+                User.is_active == True,
+                User.auto_renew == True,
+                User.payment_method_id.isnot(None),
+                User.subscription_ends <= threshold,
+                User.subscription_ends > now,
+                User.failed_payments < 3
+            )
+        )
+        return result.scalars().all()
+
+async def increment_failed_payments(user_id: int) -> int:
+    """Increment failed payment counter. Returns new count. Disables auto_renew at 3."""
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
+        if user:
+            user.failed_payments += 1
+            if user.failed_payments >= 3:
+                user.auto_renew = False
+            await session.commit()
+            if user_id in sub_cache:
+                del sub_cache[user_id]
+            return user.failed_payments
+    return 0
+
+async def reset_failed_payments(user_id: int):
+    """Reset failed payment counter after successful payment."""
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
+        if user:
+            user.failed_payments = 0
+            await session.commit()
+
+async def get_users_expiring_tomorrow():
+    """Find users whose subscription expires in 23-25 hours (for day-before notification)."""
+    async with async_session() as session:
+        now = datetime.now(timezone.utc)
+        lower = now + timedelta(hours=23)
+        upper = now + timedelta(hours=25)
+        result = await session.execute(
+            select(User).where(
+                User.is_active == True,
+                User.subscription_ends >= lower,
+                User.subscription_ends <= upper,
+            )
+        )
+        return result.scalars().all()

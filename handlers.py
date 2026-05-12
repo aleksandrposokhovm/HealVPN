@@ -101,6 +101,7 @@ async def devices_callback(callback: CallbackQuery):
         "amount": {"value": "111.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": f"https://t.me/{bot_info.username}"},
         "capture": True,
+        "save_payment_method": True,
         "description": f"Подписка HealVPN на 1 месяц для пользователя {callback.from_user.id}",
         "metadata": {"user_id": str(callback.from_user.id), "plan": "1_month"}
     }
@@ -116,7 +117,10 @@ async def devices_callback(callback: CallbackQuery):
             if "id" not in payment:
                 raise Exception(f"Failed to create payment: {payment}")
             
-            text = "💳 *Оплата подписки*\n\nПосле завершения оплаты в браузере нажмите кнопку «Проверить оплату»."
+            text = ("💳 *Оплата подписки*\n\n"
+                    "После завершения оплаты в браузере нажмите кнопку «Проверить оплату».\n\n"
+                    "_Оплачивая, вы соглашаетесь на автопродление подписки. "
+                    "Отключить можно в меню управления подпиской._")
             reply_markup = kb.pay_menu(payment["confirmation"]["confirmation_url"], payment['id'])
             
             if callback.message.photo:
@@ -141,8 +145,14 @@ async def subscription_mgmt_callback(callback: CallbackQuery):
         if not end_date.tzinfo:
             end_date = end_date.replace(tzinfo=timezone.utc)
         delta = end_date - datetime.now(timezone.utc)
-        text = f"✅ *Активна подписка*\n📅 Осталось: `{max(0, delta.days)} дн.`\n🔑 Ключ доступен по кнопке ниже."
-        reply_markup = kb.subscription_management_menu(key=key)
+        
+        auto_renew, has_pm = await db.get_user_auto_renew_status(callback.from_user.id)
+        renew_status = ""
+        if has_pm:
+            renew_status = "\n🔄 Автопродление: " + ("ВКЛ" if auto_renew else "ВЫКЛ")
+        
+        text = f"✅ *Активна подписка*\n📅 Осталось: `{max(0, delta.days)} дн.`{renew_status}\n🔑 Ключ доступен по кнопке ниже."
+        reply_markup = kb.subscription_management_menu(key=key, auto_renew=auto_renew, has_pm=has_pm)
     else:
         text = "❌ *Нет активной подписки*"
         reply_markup = kb.tariffs_menu()
@@ -216,8 +226,15 @@ async def check_payment_callback(callback: CallbackQuery):
                 await callback.answer("Ошибка при создании VPN аккаунта. Обратитесь в поддержку.", show_alert=True)
                 return
 
+            # Save payment method for auto-renewal
+            pm_id = payment.get("payment_method", {}).get("id")
+            if pm_id:
+                await db.save_payment_method(user_id, pm_id)
+                logging.info(f"Saved payment method {pm_id} for user {user_id}")
+
             # Save to DB — activate_subscription already handles adding days correctly
             await db.activate_subscription(user_id, "Стандарт", days, sub_url)
+            await db.reset_failed_payments(user_id)
 
             success_text = "✨ *Оплата прошла успешно!*\nВаша подписка активирована. 🚀"
             reply_markup = kb.success_payment_menu(sub_url)
@@ -246,6 +263,13 @@ async def copy_key_callback(callback: CallbackQuery):
     else:
         await callback.answer("Ключ не найден. Сначала оформите подписку.", show_alert=True)
 
+@router.callback_query(F.data == "toggle_auto_renew")
+async def toggle_auto_renew_callback(callback: CallbackQuery):
+    new_state = await db.toggle_auto_renew(callback.from_user.id)
+    status = "включено ✅" if new_state else "выключено ❌"
+    await callback.answer(f"Автопродление {status}", show_alert=True)
+    # Refresh the subscription management screen
+    await subscription_mgmt_callback(callback)
 @router.callback_query(F.data == "instruction")
 async def instruction_callback(callback: CallbackQuery):
     text = "📖 *Инструкция*\n1. Скачайте приложение (v2rayNG, Vultr, Streisand, etc.).\n2. Скопируйте ссылку и импортируйте профиль.\nГотово! ✅"
