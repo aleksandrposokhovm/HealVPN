@@ -30,7 +30,7 @@ def subscription_management_menu(key: str = None, auto_renew: bool = True, has_p
     
     buttons = [
         [copy_btn],
-        [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction", **{"style": "success"})],
+        [InlineKeyboardButton(text="📖 Инструкция по подключению", url="https://teletype.in/@aleksandrpos/GWmBr-MmbsK", **{"style": "success"})],
     ]
     
     # Only show auto-renew toggle if user has a saved payment method
@@ -42,10 +42,7 @@ def subscription_management_menu(key: str = None, auto_renew: bool = True, has_p
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-def instruction_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="subscription_mgmt")]
-    ])
+
 
 def back_to_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -55,7 +52,7 @@ def back_to_main() -> InlineKeyboardMarkup:
 def success_payment_menu(key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔑 Скопировать ключ", copy_text=CopyTextButton(text=key), **{"style": "success"})],
-        [InlineKeyboardButton(text="📖 Инструкция по подключению", callback_data="instruction", **{"style": "success"})],
+        [InlineKeyboardButton(text="📖 Инструкция по подключению", url="https://teletype.in/@aleksandrpos/GWmBr-MmbsK", **{"style": "success"})],
         [InlineKeyboardButton(text="🔙 На главное меню", callback_data="main_menu")]
     ])
 

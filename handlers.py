@@ -270,15 +270,6 @@ async def toggle_auto_renew_callback(callback: CallbackQuery):
     await callback.answer(f"Автопродление {status}", show_alert=True)
     # Refresh the subscription management screen
     await subscription_mgmt_callback(callback)
-@router.callback_query(F.data == "instruction")
-async def instruction_callback(callback: CallbackQuery):
-    text = "📖 *Инструкция*\n1. Скачайте приложение (v2rayNG, Vultr, Streisand, etc.).\n2. Скопируйте ссылку и импортируйте профиль.\nГотово! ✅"
-    if callback.message.photo:
-        await callback.message.edit_caption(caption=text, reply_markup=kb.instruction_menu(), parse_mode="Markdown")
-    else:
-        await callback.message.edit_text(text=text, reply_markup=kb.instruction_menu(), parse_mode="Markdown")
-    await callback.answer()
-
 @router.callback_query(F.data == "about")
 async def about_callback(callback: CallbackQuery):
     text = "ℹ️ *О нас*\nHealVPN — быстрый и анонимный сервис."
