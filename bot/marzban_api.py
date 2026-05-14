@@ -1,136 +1,162 @@
 import httpx
 import logging
-import time
-from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-from config import config
+from .config import config
+
 
 class MarzbanAPI:
+    """Async client for Marzban panel API."""
+
     def __init__(self):
-        self.base_url = config.MARZBAN_URL
-        if not self.base_url.startswith(("http://", "https://")):
-            self.base_url = f"http://{self.base_url}"
-        
-        self.username = config.MARZBAN_ADMIN_USERNAME
-        self.password = config.MARZBAN_ADMIN_PASSWORD.get_secret_value()
+        self.base_url = config.VPN_API_URL.rstrip('/')
+        # Support both naming conventions from .env
+        self.username = config.MARZBAN_ADMIN_USERNAME or config.MARZBAN_USERNAME
+        self.password = config.MARZBAN_ADMIN_PASSWORD or config.MARZBAN_PASSWORD
         self.token: Optional[str] = None
-        self.token_expiry: float = 0
-        self._client: Optional[httpx.AsyncClient] = None
 
-    async def get_client(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                timeout=20.0, 
-                verify=False,
-                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5)
-            )
-        return self._client
-
-    async def _get_token(self) -> str:
-        """Получение JWT-токена администратора."""
-        if self.token and time.time() < self.token_expiry:
+    async def get_token(self) -> str:
+        """Authenticate with Marzban and cache the access token."""
+        if self.token:
             return self.token
 
-        url = f"{self.base_url}/api/admin/token"
-        data = {
-            "username": self.username,
-            "password": self.password
+        if not self.base_url or not self.username or not self.password:
+            logging.error("Marzban API credentials are not set in config.")
+            return ""
+
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/api/admin/token",
+                    data={"username": self.username, "password": self.password},
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                response.raise_for_status()
+                data = response.json()
+                self.token = data.get("access_token", "")
+                logging.info("Successfully obtained Marzban token.")
+                return self.token
+            except Exception as e:
+                logging.error(f"Error getting Marzban token: {e}")
+                return ""
+
+    async def create_user(
+        self, username: str, data_limit: int = 0, expire: int = 0
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create a user in Marzban and return the full API response dict.
+        If the user already exists (409), fetch and return their info instead.
+        """
+        token = await self.get_token()
+        if not token:
+            return None
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
         }
-        
-        client = await self.get_client()
-        try:
-            response = await client.post(url, data=data)
-            response.raise_for_status()
-            token_data = response.json()
-            self.token = token_data["access_token"]
-            self.token_expiry = time.time() + 3600  # 1 час
-            logging.info("Successfully obtained Marzban admin token")
-            return self.token
-        except Exception as e:
-            logging.error(f"Failed to get Marzban token: {e}")
-            raise
 
-    async def _get_headers(self) -> Dict[str, str]:
-        token = await self._get_token()
-        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    async def create_user(self, username: str, data_limit_gb: int, expire_days: int) -> Dict[str, Any]:
-        url = f"{self.base_url}/api/user"
-        headers = await self._get_headers()
-        data_limit_bytes = data_limit_gb * 1024 * 1024 * 1024
-        from datetime import timezone
-        expire_timestamp = int((datetime.now(timezone.utc) + timedelta(days=expire_days)).timestamp())
-        
         payload = {
             "username": username,
-            "data_limit": data_limit_bytes,
-            "expire": expire_timestamp,
             "proxies": {"vless": {}},
-            "inbounds": {}
+            "inbounds": {},
+            "data_limit": data_limit,
+            "expire": expire,
+            "data_limit_reset_strategy": "no_reset",
+            "status": "active",
         }
-        
-        client = await self.get_client()
-        try:
-            response = await client.post(url, json=payload, headers=headers)
-            if response.status_code >= 400:
-                logging.error(f"Marzban API Error {response.status_code}: {response.text}")
-            response.raise_for_status()
-            logging.info(f"User {username} created successfully in Marzban")
-            return response.json()
-        except Exception as e:
-            logging.error(f"Error creating user {username} in Marzban: {e}")
-            raise
 
-    async def get_user_info(self, username: str) -> Dict[str, Any]:
-        url = f"{self.base_url}/api/user/{username}"
-        headers = await self._get_headers()
-        
-        client = await self.get_client()
-        try:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logging.error(f"Error getting info for user {username}: {e}")
-            raise
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/api/user", json=payload, headers=headers
+                )
 
-    async def reset_user_stats(self, username: str) -> bool:
-        url = f"{self.base_url}/api/user/{username}/reset"
-        headers = await self._get_headers()
-        
-        client = await self.get_client()
-        try:
-            response = await client.post(url, headers=headers)
-            success = response.status_code == 200
-            if success:
-                logging.info(f"Stats reset for user {username}")
-            return success
-        except Exception as e:
-            logging.error(f"Error resetting stats for user {username}: {e}")
+                if response.status_code == 401:
+                    self.token = None # Reset token on unauthorized
+                    return await self.create_user(username, data_limit, expire)
+
+                if response.status_code == 409:
+                    logging.info(
+                        f"User {username} already exists in Marzban, fetching info..."
+                    )
+                    return await self.get_user(username)
+
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                logging.error(f"Marzban HTTP error: {e.response.text}")
+                return None
+            except Exception as e:
+                logging.error(f"Error creating user in Marzban: {e}")
+                return None
+
+    async def get_user(self, username: str) -> Optional[Dict[str, Any]]:
+        """Fetch existing user info from Marzban."""
+        token = await self.get_token()
+        if not token:
+            return None
+
+        headers = {"Authorization": f"Bearer {token}"}
+
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                response = await client.get(
+                    f"{self.base_url}/api/user/{username}", headers=headers
+                )
+                if response.status_code == 401:
+                    self.token = None # Reset token on unauthorized
+                    return await self.get_user(username)
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                logging.error(f"Error getting user from Marzban: {e}")
+                return None
+
+    async def update_user_expire(self, username: str, expire_ts: int) -> bool:
+        """
+        Update the expiry timestamp for an existing Marzban user.
+        Called when a user renews their subscription to keep Marzban in sync.
+        """
+        token = await self.get_token()
+        if not token:
             return False
 
-    async def update_user_expiry(self, username: str, extra_days: int) -> Dict[str, Any]:
-        user = await self.get_user_info(username)
-        current_expire = user.get("expire")
-        now_ts = int(time.time())
-        if not current_expire or current_expire < now_ts:
-            new_expire = now_ts + (extra_days * 86400)
-        else:
-            new_expire = current_expire + (extra_days * 86400)
-            
-        url = f"{self.base_url}/api/user/{username}"
-        headers = await self._get_headers()
-        payload = {"expire": new_expire}
-        
-        client = await self.get_client()
-        try:
-            response = await client.put(url, json=payload, headers=headers)
-            response.raise_for_status()
-            logging.info(f"Subscription extended for {username} by {extra_days} days")
-            return response.json()
-        except Exception as e:
-            logging.error(f"Error extending subscription for {username}: {e}")
-            raise
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
 
-# Экземпляр API для использования в других модулях
-marzban = MarzbanAPI()
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                response = await client.put(
+                    f"{self.base_url}/api/user/{username}",
+                    json={"expire": expire_ts, "status": "active"},
+                    headers=headers,
+                )
+                if response.status_code == 401:
+                    self.token = None # Reset token on unauthorized
+                    return await self.update_user_expire(username, expire_ts)
+                response.raise_for_status()
+                logging.info(f"Updated Marzban expire for user {username} to {expire_ts}")
+                return True
+            except Exception as e:
+                logging.error(f"Error updating Marzban user expire for {username}: {e}")
+                return False
+
+    async def validate_subscription(self, sub_url: str) -> bool:
+        """
+        Health-check: GET the subscription URL to verify it returns valid content.
+        """
+        if not sub_url:
+            return False
+
+        async with httpx.AsyncClient(verify=False) as client:
+            try:
+                response = await client.get(sub_url, timeout=10.0)
+                return response.status_code == 200 and len(response.text) > 10
+            except Exception as e:
+                logging.error(f"Error validating subscription URL {sub_url}: {e}")
+                return False
+
+
+marzban_api = MarzbanAPI()

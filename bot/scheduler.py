@@ -4,9 +4,9 @@ import base64
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
-import database as db
-from marzban_api import marzban_api
-from config import config
+from . import database as db
+from .marzban_api import marzban_api
+from .config import config
 
 def get_yookassa_headers():
     auth_str = f"{config.YOOKASSA_SHOP_ID}:{config.YOOKASSA_SECRET_KEY.get_secret_value()}"
@@ -152,7 +152,7 @@ async def notify_expiring_subscriptions(bot: Bot):
     # 2. Check for 12h reminders (New requirement)
     async with db.async_session() as session:
         from sqlalchemy import select
-        from models import User
+        from .models import User
         now = datetime.now(timezone.utc)
         lower = now + timedelta(hours=11)
         upper = now + timedelta(hours=12)

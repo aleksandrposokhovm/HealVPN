@@ -1,10 +1,10 @@
 import logging
 import asyncio
 from aiogram import Bot, Dispatcher
-from config import config
-from handlers import router
-from database import init_db
-from scheduler import setup_scheduler
+from bot.config import config
+from bot.handlers import router
+from bot.database import init_db
+from bot.scheduler import setup_scheduler
 
 # Enable logging
 logging.basicConfig(
