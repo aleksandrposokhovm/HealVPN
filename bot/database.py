@@ -250,3 +250,30 @@ async def get_users_for_trial_reminder():
             )
         )
         return result.scalars().all()
+
+async def delete_user(user_id: int):
+    """Delete user from database."""
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
+        if user:
+            await session.delete(user)
+            await session.commit()
+            if user_id in sub_cache:
+                del sub_cache[user_id]
+            return True
+    return False
+
+async def update_subscription_date(user_id: int, expiry_date: datetime):
+    """Update user's subscription end date and activation status."""
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
+        if user:
+            user.subscription_ends = expiry_date
+            user.is_active = expiry_date > datetime.now(timezone.utc)
+            await session.commit()
+            if user_id in sub_cache:
+                del sub_cache[user_id]
+            return True
+    return False
