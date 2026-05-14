@@ -219,19 +219,31 @@ async def get_users_expiring_tomorrow():
         return result.scalars().all()
 
 async def is_trial_available(user_id: int) -> bool:
-    """Check if user can use the trial period (never or more than 3 months ago)."""
+    """Check if user can use the trial period (never or more than 3 months ago since ANY subscription ended)."""
     async with async_session() as session:
         result = await session.execute(select(User).where(User.id == user_id))
         user = result.scalars().first()
         if not user:
             return True
         
-        if not user.last_trial_date:
-            return True
-            
         now = datetime.now(timezone.utc)
         three_months_ago = now - timedelta(days=90)
-        return user.last_trial_date < three_months_ago
+        
+        # Check if trial was used recently
+        if user.last_trial_date:
+            if not user.last_trial_date.tzinfo:
+                user.last_trial_date = user.last_trial_date.replace(tzinfo=timezone.utc)
+            if user.last_trial_date > three_months_ago:
+                return False
+                
+        # Check if ANY subscription ended recently
+        if user.subscription_ends:
+            if not user.subscription_ends.tzinfo:
+                user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
+            if user.subscription_ends > three_months_ago:
+                return False
+            
+        return True
 
 async def get_users_for_trial_reminder():
     """Find users whose trial ended approximately 90 days ago (within the last 24h) and who are not active."""
