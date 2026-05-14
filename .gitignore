@@ -1,6 +1,55 @@
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variable files
+.env
+.env.*
+!.env.example
+
+# Virtual environments
+venv/
+ENV/
+env/
+*.venv
+
+# Test and coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# Distribution / build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+*.manifest
+*.spec
+
+# IDE / editor directories
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS generated files
 .DS_Store
-bot/.env
-bot/*.log
-bot/__pycache__/
-bot/healvpn.db
-bot/scratch/
+Thumbs.db
+
+# Docker related files (keep Dockerfile, ignore generated compose overrides)
+docker-compose.override.yml
+
+# Log files
+*.log
+
+# Secret keys and certificates
+*.key
+*.pem

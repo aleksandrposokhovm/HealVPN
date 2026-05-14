@@ -1,0 +1,9 @@
+aiogram>=3.4.1
+python-dotenv
+yookassa
+pydantic-settings
+httpx
+SQLAlchemy[asyncio]>=2.0
+asyncpg
+alembic
+apscheduler

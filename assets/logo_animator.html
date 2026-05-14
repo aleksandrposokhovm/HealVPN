@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HealVPN Logo Animator & Export</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
+    <style>
+        :root {
+            --bg-color: #050505;
+            --accent-color: #00E676; /* Mint Green from logo_mint_dark.svg */
+            --text-color: #ffffff;
+            --card-bg: #121212;
+            --glass-bg: rgba(255, 255, 255, 0.03);
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Outfit', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 20% 20%, rgba(0, 230, 118, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 80% 80%, rgba(0, 230, 118, 0.05) 0%, transparent 40%);
+        }
+
+        .container {
+            max-width: 800px;
+            width: 90%;
+            text-align: center;
+            z-index: 10;
+        }
+
+        h1 {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #fff 0%, #00E676 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            color: rgba(255,255,255,0.5);
+            margin-bottom: 2.5rem;
+            font-weight: 300;
+        }
+
+        .preview-card {
+            background: var(--card-bg);
+            padding: 40px;
+            border-radius: 48px;
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 40px 100px rgba(0,0,0,0.8);
+            margin-bottom: 2.5rem;
+            position: relative;
+        }
+
+        #animation-viewport {
+            width: 400px;
+            height: 400px;
+            background: #000;
+            border-radius: 32px;
+            position: relative;
+            overflow: hidden;
+            margin: 0 auto;
+            border: 1px solid rgba(0, 230, 118, 0.1);
+        }
+
+        #canvas-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .logo-wrapper {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 240px;
+            height: 240px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 5;
+        }
+
+        .logo-wrapper svg {
+            width: 100%;
+            height: 100%;
+            filter: drop-shadow(0 15px 30px rgba(0, 230, 118, 0.3));
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: var(--accent-color);
+            color: #000;
+            border: none;
+            padding: 16px 36px;
+            border-radius: 100px;
+            font-family: inherit;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            box-shadow: 0 4px 15px rgba(0, 230, 118, 0.2);
+        }
+
+        button:hover {
+            transform: translateY(-5px) scale(1.02);
+            box-shadow: 0 15px 30px rgba(0, 230, 118, 0.3);
+            filter: brightness(1.1);
+        }
+
+        button:active {
+            transform: translateY(0) scale(0.98);
+        }
+
+        button.secondary {
+            background: var(--glass-bg);
+            color: #fff;
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--glass-border);
+            box-shadow: none;
+        }
+
+        button.secondary:hover {
+            background: rgba(255,255,255,0.08);
+            border-color: rgba(255,255,255,0.2);
+        }
+
+        #status {
+            margin-top: 1.5rem;
+            font-size: 0.9rem;
+            color: rgba(255,255,255,0.4);
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+            line-height: 1.6;
+        }
+
+        .recording-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            backdrop-filter: blur(20px);
+        }
+
+        .loader {
+            width: 64px;
+            height: 64px;
+            border: 4px solid rgba(255,255,255,0.1);
+            border-bottom-color: var(--accent-color);
+            border-radius: 50%;
+            display: inline-block;
+            box-sizing: border-box;
+            animation: rotation 1s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite;
+            margin-bottom: 2rem;
+        }
+
+        @keyframes rotation {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 6px;
+            background: rgba(0, 230, 118, 0.1);
+            color: var(--accent-color);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .telegram-hint {
+            margin-top: 3rem;
+            padding: 20px;
+            background: rgba(0, 136, 204, 0.1);
+            border: 1px solid rgba(0, 136, 204, 0.2);
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: #88c9ff;
+            text-align: left;
+        }
+
+        .telegram-hint b { color: #fff; }
+    </style>
+</head>
+<body>
+
+    <div class="recording-overlay" id="overlay">
+        <div class="loader"></div>
+        <div id="progress-text" style="font-size: 1.2rem; font-weight: 600;">Подготовка экспорта...</div>
+        <div id="sub-progress" style="color: rgba(255,255,255,0.5); margin-top: 0.5rem;">Это может занять несколько секунд</div>
+    </div>
+
+    <div class="container">
+        <div class="badge">Premium Identity</div>
+        <h1>HealVPN Flying Logo</h1>
+        <p class="subtitle">Генерация анимации для приветственного экрана Telegram-бота</p>
+        
+        <div class="preview-card">
+            <div id="animation-viewport">
+                <canvas id="canvas-bg"></canvas>
+                <div class="logo-wrapper" id="logo-el">
+                    <!-- Correct Logo: Green Squircle with Cutout Shield -->
+                    <svg viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="1024" height="1024" rx="220" fill="#00E676"/>
+                        <g transform="translate(212, 212) scale(25)">
+                            <path d="M12 22C12 22 20 18 20 12V5L12 2L4 5V12C4 18 12 22 12 22Z" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M8 12H16M12 8V16" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                        </g>
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="export-mp4">
+                <span>📹</span> Скачать MP4 (Для Telegram)
+            </button>
+            <button id="export-gif" class="secondary">
+                <span>✨</span> Скачать GIF
+            </button>
+            <button class="secondary" onclick="location.reload()" title="Сброс">
+                <span>🔄</span>
+            </button>
+        </div>
+        
+        <div id="status">
+            Для приветственного сообщения Telegram (Description) используйте <b>MP4</b>. <br>
+            GIF в этом разделе часто отображается статично.
+        </div>
+
+        <div class="telegram-hint">
+            💡 <b>Инструкция для Telegram:</b><br>
+            1. Напишите <b>@BotFather</b> -> <b>/mybots</b><br>
+            2. Выберите вашего бота -> <b>Edit Bot</b> -> <b>Edit Description Picture</b><br>
+            3. Отправьте скачанный <b>MP4</b> файл. Теперь при входе в бота будет красивая анимация!
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas-bg');
+        const ctx = canvas.getContext('2d');
+        const viewport = document.getElementById('animation-viewport');
+        const logoEl = document.getElementById('logo-el');
+        const overlay = document.getElementById('overlay');
+        const progressText = document.getElementById('progress-text');
+        
+        let width, height;
+        let particles = [];
+        const particleCount = 25;
+        let frameCount = 0;
+
+        function resize() {
+            width = viewport.clientWidth;
+            height = viewport.clientHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Particle {
+            constructor() {
+                this.reset();
+                this.x = Math.random() * width;
+            }
+
+            reset() {
+                this.x = width + Math.random() * 200;
+                this.y = Math.random() * height;
+                this.length = 60 + Math.random() * 150;
+                this.speed = 8 + Math.random() * 15;
+                this.opacity = 0.05 + Math.random() * 0.4;
+                this.width = 1 + Math.random() * 2;
+            }
+
+            update() {
+                this.x -= this.speed;
+                if (this.x + this.length < -100) {
+                    this.reset();
+                }
+            }
+
+            draw(targetCtx) {
+                targetCtx.beginPath();
+                const gradient = targetCtx.createLinearGradient(this.x, this.y, this.x + this.length, this.y);
+                gradient.addColorStop(0, `rgba(0, 230, 118, 0)`);
+                gradient.addColorStop(0.5, `rgba(0, 230, 118, ${this.opacity})`);
+                gradient.addColorStop(1, `rgba(0, 230, 118, 0)`);
+                
+                targetCtx.strokeStyle = gradient;
+                targetCtx.lineWidth = this.width;
+                targetCtx.lineCap = 'round';
+                targetCtx.moveTo(this.x, this.y);
+                targetCtx.lineTo(this.x + this.length, this.y);
+                targetCtx.stroke();
+            }
+        }
+
+        for (let i = 0; i < particleCount; i++) {
+            particles.push(new Particle());
+        }
+
+        function animate() {
+            frameCount++;
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, width, height);
+            
+            // Subtle glow in center
+            const radGrad = ctx.createRadialGradient(width/2, height/2, 0, width/2, height/2, width/1.5);
+            radGrad.addColorStop(0, 'rgba(0, 230, 118, 0.05)');
+            radGrad.addColorStop(1, 'transparent');
+            ctx.fillStyle = radGrad;
+            ctx.fillRect(0, 0, width, height);
+
+            particles.forEach(p => {
+                p.update();
+                p.draw(ctx);
+            });
+
+            // Bobbing logo logic
+            const bob = Math.sin(frameCount * 0.05) * 12;
+            logoEl.style.transform = `translate(-50%, calc(-50% + ${bob}px))`;
+
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+
+        // MP4 Export using MediaRecorder
+        document.getElementById('export-mp4').addEventListener('click', async () => {
+            overlay.style.display = 'flex';
+            progressText.innerText = 'Запись видео...';
+            
+            // Create a dedicated capture canvas to ensure high quality and correct size
+            const captureCanvas = document.createElement('canvas');
+            captureCanvas.width = 512;
+            captureCanvas.height = 512;
+            const cCtx = captureCanvas.getContext('2d');
+            
+            // Pre-load SVG as image for drawing on canvas
+            const svgData = new XMLSerializer().serializeToString(logoEl.querySelector('svg'));
+            const svgBlob = new Blob([svgData], {type: 'image/svg+xml;charset=utf-8'});
+            const url = URL.createObjectURL(svgBlob);
+            const img = new Image();
+            await new Promise(r => { img.onload = r; img.src = url; });
+
+            const stream = captureCanvas.captureStream(60);
+            const recorder = new MediaRecorder(stream, {
+                mimeType: 'video/webm;codecs=vp9', // Best quality for webm, can be renamed to mp4 for many tools
+                videoBitsPerSecond: 5000000
+            });
+
+            const chunks = [];
+            recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/mp4' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'healvpn_welcome_animation.mp4';
+                a.click();
+                overlay.style.display = 'none';
+            };
+
+            recorder.start();
+
+            let framesCaptured = 0;
+            const totalFrames = 180; // 3 seconds at 60fps
+
+            function recordFrame() {
+                if (framesCaptured >= totalFrames) {
+                    recorder.stop();
+                    return;
+                }
+
+                // Render current state to capture canvas
+                cCtx.fillStyle = '#000';
+                cCtx.fillRect(0, 0, 512, 512);
+                
+                // Center glow
+                const g = cCtx.createRadialGradient(256, 256, 0, 256, 256, 300);
+                g.addColorStop(0, 'rgba(0, 230, 118, 0.1)');
+                g.addColorStop(1, 'transparent');
+                cCtx.fillStyle = g;
+                cCtx.fillRect(0, 0, 512, 512);
+
+                particles.forEach(p => {
+                    p.update();
+                    p.draw(cCtx);
+                });
+
+                const bob = Math.sin(framesCaptured * 0.1) * 15;
+                cCtx.save();
+                cCtx.translate(256, 256 + bob);
+                cCtx.shadowBlur = 30;
+                cCtx.shadowColor = 'rgba(0, 230, 118, 0.4)';
+                cCtx.drawImage(img, -140, -140, 280, 280);
+                cCtx.restore();
+
+                framesCaptured++;
+                requestAnimationFrame(recordFrame);
+            }
+
+            recordFrame();
+        });
+
+        // GIF Export
+        document.getElementById('export-gif').addEventListener('click', async () => {
+            overlay.style.display = 'flex';
+            progressText.innerText = 'Подготовка GIF...';
+            
+            const gif = new GIF({
+                workers: 2,
+                quality: 5,
+                width: 512,
+                height: 512,
+                workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'
+            });
+
+            const captureCanvas = document.createElement('canvas');
+            captureCanvas.width = 512;
+            captureCanvas.height = 512;
+            const cCtx = captureCanvas.getContext('2d');
+
+            const svgData = new XMLSerializer().serializeToString(logoEl.querySelector('svg'));
+            const svgBlob = new Blob([svgData], {type: 'image/svg+xml;charset=utf-8'});
+            const url = URL.createObjectURL(svgBlob);
+            const img = new Image();
+            await new Promise(r => { img.onload = r; img.src = url; });
+
+            const frames = 60; 
+            for (let i = 0; i < frames; i++) {
+                progressText.innerText = `Захват кадров... ${Math.round((i / frames) * 100)}%`;
+                
+                cCtx.fillStyle = '#000';
+                cCtx.fillRect(0, 0, 512, 512);
+
+                particles.forEach(p => {
+                    p.update();
+                    p.draw(cCtx);
+                });
+
+                const bob = Math.sin((i / frames) * Math.PI * 2) * 15;
+                cCtx.save();
+                cCtx.translate(256, 256 + bob);
+                cCtx.drawImage(img, -140, -140, 280, 280);
+                cCtx.restore();
+
+                gif.addFrame(cCtx, {copy: true, delay: 33});
+            }
+
+            gif.on('progress', (p) => {
+                progressText.innerText = `Рендеринг GIF... ${Math.round(p * 100)}%`;
+            });
+
+            gif.on('finished', (blob) => {
+                overlay.style.display = 'none';
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'healvpn_animated.gif';
+                a.click();
+            });
+
+            gif.render();
+        });
+    </script>
+</body>
+</html>
