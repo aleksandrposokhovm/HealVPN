@@ -71,6 +71,10 @@ class MarzbanAPI:
                     f"{self.base_url}/api/user", json=payload, headers=headers
                 )
 
+                if response.status_code == 401:
+                    self.token = None # Reset token on unauthorized
+                    return await self.create_user(username, data_limit, expire)
+
                 if response.status_code == 409:
                     logging.info(
                         f"User {username} already exists in Marzban, fetching info..."
@@ -99,6 +103,9 @@ class MarzbanAPI:
                 response = await client.get(
                     f"{self.base_url}/api/user/{username}", headers=headers
                 )
+                if response.status_code == 401:
+                    self.token = None # Reset token on unauthorized
+                    return await self.get_user(username)
                 response.raise_for_status()
                 return response.json()
             except Exception as e:
@@ -126,6 +133,9 @@ class MarzbanAPI:
                     json={"expire": expire_ts, "status": "active"},
                     headers=headers,
                 )
+                if response.status_code == 401:
+                    self.token = None # Reset token on unauthorized
+                    return await self.update_user_expire(username, expire_ts)
                 response.raise_for_status()
                 logging.info(f"Updated Marzban expire for user {username} to {expire_ts}")
                 return True

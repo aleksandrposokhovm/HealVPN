@@ -223,10 +223,11 @@ async def is_trial_available(user_id: int) -> bool:
         return user.last_trial_date < three_months_ago
 
 async def get_users_for_trial_reminder():
-    """Find users whose trial ended exactly 90 days ago and who are not active."""
+    """Find users whose trial ended approximately 90 days ago (within the last 24h) and who are not active."""
     async with async_session() as session:
         now = datetime.now(timezone.utc)
-        target_date_start = now - timedelta(days=90, hours=1)
+        # Check users who became eligible in the last 24 hours
+        target_date_start = now - timedelta(days=90, hours=24)
         target_date_end = now - timedelta(days=90)
         
         result = await session.execute(
