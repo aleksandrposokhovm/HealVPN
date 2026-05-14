@@ -90,12 +90,12 @@ async def main_menu_callback(callback: CallbackQuery):
 async def tariffs_callback(callback: CallbackQuery):
     sub = await db.get_user_subscription(callback.from_user.id)
     is_active = sub[3] if sub else False
-    
+
     # Show trial only if it's available AND user doesn't have an active subscription
     trial_avail = False
     if not is_active:
         trial_avail = await db.is_trial_available(callback.from_user.id)
-        
+
     text = "💳 *Выберите количество устройств:*"
     reply_markup = kb.tariffs_menu(trial_available=trial_avail)
     if callback.message.photo:
@@ -115,7 +115,7 @@ async def trial_callback(callback: CallbackQuery):
         "description": f"Пробный период HealVPN на 7 дней для пользователя {callback.from_user.id}",
         "metadata": {"user_id": str(callback.from_user.id), "plan": "trial_7_days"}
     }
-    
+
     try:
         headers = get_yookassa_headers().copy()
         headers["Idempotence-Key"] = str(uuid.uuid4())
@@ -130,7 +130,7 @@ async def trial_callback(callback: CallbackQuery):
             text = ("🎁 *Пробный период на 7 дней*\n\n"
                     "Стоимость: 11 рублей.\n\n"
                     "После завершения оплаты в браузере нажмите кнопку «✅ Проверить оплату».\n\n"
-                    "Оплачивая пробный период, вы привязываете карту. Через 7 дней подписка автоматически продлится на 1 месяц за 111 рублей.\n\n"
+                    "Оплачивая пробный период, вы активируете автопродление. Спустя неделю подписка будет продлена на стандартный месяц за 111₽ со счета привязанной карты.\n\n"
                     "Отключить автопродление можно в любой момент в разделе «⚙️ Управление подпиской».")
             reply_markup = kb.pay_menu(payment["confirmation"]["confirmation_url"], payment['id'], is_trial=True)
 
@@ -195,13 +195,22 @@ async def subscription_mgmt_callback(callback: CallbackQuery):
         if not end_date.tzinfo:
             end_date = end_date.replace(tzinfo=timezone.utc)
         delta = end_date - datetime.now(timezone.utc)
+        total_seconds = int(delta.total_seconds())
+
+        if total_seconds > 0:
+            days = total_seconds // 86400
+            hours = (total_seconds % 86400) // 3600
+            minutes = (total_seconds % 3600) // 60
+            time_left = f"{days} дн. {hours} ч. {minutes} мин."
+        else:
+            time_left = "0 дн. 0 ч. 0 мин."
 
         auto_renew, has_pm = await db.get_user_auto_renew_status(callback.from_user.id)
         renew_status = ""
         if has_pm:
             renew_status = "\n🔄 Автопродление: " + ("ВКЛ" if auto_renew else "ВЫКЛ")
 
-        text = f"✅ *Активна подписка*\n📅 Осталось: `{max(0, delta.days)} дн.`{renew_status}\n🔑 Ключ доступен по кнопке ниже."
+        text = f"✅ *Активна подписка*\n📅 Осталось: `{time_left}`{renew_status}\n🔑 Ключ доступен по кнопке ниже."
         reply_markup = kb.subscription_management_menu(key=key, auto_renew=auto_renew, has_pm=has_pm)
     else:
         trial_avail = await db.is_trial_available(callback.from_user.id)
@@ -236,7 +245,7 @@ async def check_payment_callback(callback: CallbackQuery):
             metadata = payment.get('metadata', {})
             plan = metadata.get('plan', '1_month')
             days = 7 if plan == 'trial_7_days' else 30
-            
+
             marzban_username = str(user_id)
 
             # Check existing subscription in DB to properly add days on renewal
@@ -329,6 +338,7 @@ async def enable_auto_renew_callback(callback: CallbackQuery):
     await callback.answer("✅ Автопродление включено", show_alert=True)
     # Refresh the subscription management screen
     await subscription_mgmt_callback(callback)
+
 @router.callback_query(F.data == "about")
 async def about_callback(callback: CallbackQuery):
     text = "ℹ️ *О нас*\nHealVPN — быстрый и анонимный сервис."

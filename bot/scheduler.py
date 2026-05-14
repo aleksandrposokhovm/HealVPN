@@ -37,7 +37,7 @@ async def create_auto_payment(user_id: int, payment_method_id: str) -> dict:
         return response.json()
 
 async def auto_renew_subscriptions(bot: Bot):
-    """Background job: auto-renew subscriptions expiring within 24 hours."""
+    """Background job: auto-renew subscriptions at 24h, 12h, and 30m before expiry."""
     users = await db.get_users_for_auto_renew()
     
     if not users:
@@ -70,114 +70,112 @@ async def auto_renew_subscriptions(bot: Bot):
                         parse_mode="Markdown"
                     )
                 except Exception:
-                    pass  # User might have blocked the bot
+                    pass
                 
                 logging.info(f"Auto-renewed subscription for user {user.id}")
             
-            elif payment.get("status") in ["canceled", "pending_capture"]: # Handle both failure and slow payments
-                if user.failed_payments == 0:
-                    # First failure — Give 12 hours grace period
-                    from datetime import timedelta
-                    
-                    # Update in DB first to get the new end date
-                    await db.grant_grace_period(user.id, hours=12)
-                    
-                    # Fetch updated user to get the exact new expiration
-                    updated_sub = await db.get_user_subscription(user.id)
-                    if updated_sub:
-                        new_grace_end = updated_sub[1]
-                        expire_ts = int(new_grace_end.timestamp())
-                        await marzban_api.update_user_expire(str(user.id), expire_ts)
-                    
+            elif payment.get("status") in ["canceled", "pending_capture"]:
+                # Payment failed — handle based on attempt number
+                new_fail_count = await db.increment_failed_payments(user.id)
+                
+                text = ""
+                if new_fail_count == 1:
+                    # 24h attempt failed
                     text = (
-                        "⚠️ *Проблема с оплатой*\n\n"
-                        "К сожалению, нам не удалось списать средства за подписку с вашей карты. "
-                        "Мы добавили вам **12 часов бонусного доступа**, чтобы вы не потеряли связь с любимыми сервисами. 🛡\n\n"
-                        "Пожалуйста, пополните карту в течение этого времени. "
-                        "Через 12 часов доступ к нашему сервису будет ограничен. Мы будем очень ждать вашего возвращения! ✨"
+                        "❌ *Проблема с оплатой (осталось 24 часа)*\n\n"
+                        "К сожалению, нам не удалось списать средства для продления вашей подписки HealVPN. "
+                        "Мы попробуем совершить повторный платеж через 12 часов. "
+                        "Пожалуйста, проверьте баланс вашей карты, чтобы не потерять доступ к сервису! 🛡"
                     )
+                elif new_fail_count == 2:
+                    # 12h attempt failed
+                    text = (
+                        "🚨 *Важное уведомление (осталось 12 часов)*\n\n"
+                        "Повторная попытка продлить подписку не удалась. До отключения VPN осталось всего 12 часов. "
+                        "Чтобы не остаться без любимых сервисов, пожалуйста, пополните карту или продлите подписку вручную в меню «Управление подпиской». ✨"
+                    )
+                elif new_fail_count >= 3:
+                    # 30m attempt failed
+                    text = (
+                        "⚠️ *Доступ будет ограничен через 30 минут*\n\n"
+                        "К сожалению, финальная попытка продлить подписку автоматически не удалась. "
+                        "Через полчаса срок действия вашего ключа истечет и VPN перестанет работать. "
+                        "Вы можете продлить подписку вручную в любой момент в меню бота. Мы будем очень вас ждать! 🛡"
+                    )
+                
+                if text:
                     try:
                         await bot.send_message(user.id, text, parse_mode="Markdown")
                     except Exception:
                         pass
-                    logging.info(f"Grace period 12h granted for user {user.id}")
-                else:
-                    # Second failure — Already had grace period, now deactivate
-                    await db.increment_failed_payments(user.id) # will hit 2
-                    # The cron job deactivate_expired_subscriptions will handle actual deactivation in DB
-                    # but we can do it here too for Marzban
-                    await marzban_api.update_user_expire(str(user.id), int(datetime.now(timezone.utc).timestamp()))
-                    
-                    try:
-                        await bot.send_message(
-                            user.id,
-                            "❌ *Подписка не была продлена*\n\n"
-                            "Повторная попытка списания не удалась. Ваш доступ к VPN ограничен.\n"
-                            "Пополните карту и продлите подписку вручную в меню бота. Мы всегда вам рады! 👋",
-                            parse_mode="Markdown"
-                        )
-                    except Exception:
-                        pass
-                    logging.warning(f"Auto-renew failed again for user {user.id}, stopping.")
+                
+                logging.info(f"Auto-renew attempt {new_fail_count} failed for user {user.id}")
             
         except Exception as e:
             logging.error(f"Auto-renew error for user {user.id}: {e}", exc_info=True)
 
 async def notify_expiring_subscriptions(bot: Bot):
-    """Background job: notify users whose subscription expires tomorrow or in 12 hours."""
+    """Background job: notify users whose subscription expires in 24h, 12h, or 30m (for manual renewal)."""
     from datetime import datetime, timezone, timedelta
     
-    # 1. Check for 24h reminders (existing logic)
-    users_24h = await db.get_users_expiring_tomorrow()
-    for user in users_24h:
-        try:
-            auto_renew, has_pm = await db.get_user_auto_renew_status(user.id)
-            if has_pm and auto_renew:
-                text = (
-                    "⏰ *Напоминание*\n\n"
-                    "Ваша подписка HealVPN истекает завтра.\n"
-                    "💳 С вашей карты будет автоматически списано *111 ₽*.\n\n"
-                    "_Отключить автопродление можно в меню «Управление подпиской»._"
-                )
-            else:
-                text = (
-                    "⏰ *Напоминание*\n\n"
-                    "Ваша подписка HealVPN истекает завтра.\n"
-                    "Продлите подписку, чтобы не потерять доступ! 🚀"
-                )
-            await bot.send_message(user.id, text, parse_mode="Markdown")
-        except Exception:
-            pass
-
-    # 2. Check for 12h reminders (New requirement)
+    # 1. 24h Reminder (Manual only)
+    # Window: 23.5 - 24.5 hours
     async with db.async_session() as session:
-        from sqlalchemy import select
+        from sqlalchemy import select, or_
         from .models import User
         now = datetime.now(timezone.utc)
-        lower = now + timedelta(hours=11)
-        upper = now + timedelta(hours=12)
+        
         result = await session.execute(
             select(User).where(
                 User.is_active == True,
-                User.subscription_ends >= lower,
-                User.subscription_ends <= upper,
+                User.auto_renew == False, # Only for manual
+                User.subscription_ends >= now + timedelta(hours=23, minutes=30),
+                User.subscription_ends <= now + timedelta(hours=24, minutes=30)
             )
         )
-        users_12h = result.scalars().all()
-        
-        for user in users_12h:
+        for user in result.scalars().all():
             try:
-                auto_renew, has_pm = await db.get_user_auto_renew_status(user.id)
-                if has_pm and auto_renew:
+                text = (
+                    "⏰ *Напоминание (осталось 24 часа)*\n\n"
+                    "Ваша подписка HealVPN истекает завтра. Продлите её сейчас в меню «Управление подпиской», "
+                    "чтобы не потерять стабильный доступ к любимым ресурсам и высокую скорость! 🛡🚀"
+                )
+                await bot.send_message(user.id, text, parse_mode="Markdown")
+            except Exception: pass
+
+    # 2. 12h and 30m Reminders (Manual only)
+    async with db.async_session() as session:
+        now = datetime.now(timezone.utc)
+        # 12h window: 11.5 - 12.5 hours
+        # 30m window: 0 - 1 hour (deactivator will handle expired)
+        result = await session.execute(
+            select(User).where(
+                User.is_active == True,
+                User.auto_renew == False,
+                or_(
+                    (User.subscription_ends >= now + timedelta(hours=11, minutes=30)) & (User.subscription_ends <= now + timedelta(hours=12, minutes=30)),
+                    (User.subscription_ends >= now) & (User.subscription_ends <= now + timedelta(hours=1))
+                )
+            )
+        )
+        for user in result.scalars().all():
+            try:
+                remains = user.subscription_ends - now
+                if timedelta(hours=11, minutes=30) <= remains <= timedelta(hours=12, minutes=30):
                     text = (
-                        "⏳ *Важное уведомление*\n\n"
-                        "Пробный период (или подписка) истекает через 12 часов.\n"
-                        "💳 Будет произведено автоматическое списание *111 ₽* для продления доступа на месяц.\n\n"
-                        "Оставайтесь под защитой HealVPN! 🛡"
+                        "⏳ *Важное уведомление (осталось 12 часов)*\n\n"
+                        "До отключения VPN осталось всего 12 часов. Чтобы не остаться без любимых сервисов "
+                        "в самый неподходящий момент, пожалуйста, продлите подписку в меню бота. ✨"
                     )
                     await bot.send_message(user.id, text, parse_mode="Markdown")
-            except Exception:
-                pass
+                elif timedelta(seconds=0) <= remains <= timedelta(hours=1):
+                    text = (
+                        "🚨 *Финальный отсчет: 30 минут*\n\n"
+                        "Ваша подписка HealVPN истекает совсем скоро. Через полчаса доступ будет ограничен. "
+                        "Продлите его прямо сейчас в меню, чтобы не прерывать работу! 🚀"
+                    )
+                    await bot.send_message(user.id, text, parse_mode="Markdown")
+            except Exception: pass
 
 async def notify_trial_available_again(bot: Bot):
     """Notify users who haven't used trial for 3 months."""

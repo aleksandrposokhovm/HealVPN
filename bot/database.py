@@ -116,19 +116,6 @@ async def save_payment_method(user_id: int, payment_method_id: str):
             if user_id in sub_cache:
                 del sub_cache[user_id]
 
-async def toggle_auto_renew(user_id: int) -> bool:
-    """Toggle auto-renewal for user. Returns new state."""
-    async with async_session() as session:
-        result = await session.execute(select(User).where(User.id == user_id))
-        user = result.scalars().first()
-        if user:
-            user.auto_renew = not user.auto_renew
-            await session.commit()
-            if user_id in sub_cache:
-                del sub_cache[user_id]
-            return user.auto_renew
-    return False
-
 async def set_auto_renew(user_id: int, status: bool):
     """Set auto-renewal status for user."""
     async with async_session() as session:
@@ -150,34 +137,36 @@ async def get_user_auto_renew_status(user_id: int) -> tuple:
     return (False, False)
 
 async def get_users_for_auto_renew():
-    """Find users whose subscription expires very soon (within 1 hour) or has already expired, but have auto-renew enabled."""
+    """
+    Find users for auto-renewal based on three attempts:
+    1. 24 hours before (failed_payments == 0)
+    2. 12 hours before (failed_payments == 1)
+    3. 30 minutes before (failed_payments == 2)
+    """
     async with async_session() as session:
         now = datetime.now(timezone.utc)
-        threshold = now + timedelta(hours=1)
+        
+        # We use slightly wider windows to ensure the hourly scheduler doesn't miss anyone,
+        # but the failed_payments check ensures we only try once per window.
+        
+        # Window 1: 24h attempt (23-25 hours left)
+        # Window 2: 12h attempt (11-13 hours left)
+        # Window 3: 30m attempt (0-1 hour left)
+        
         result = await session.execute(
             select(User).where(
                 User.is_active == True,
                 User.auto_renew == True,
                 User.payment_method_id.isnot(None),
-                User.subscription_ends <= threshold,
-                User.failed_payments < 2 # 0 = first attempt, 1 = after grace period
+                (
+                    ((User.subscription_ends <= now + timedelta(hours=25)) & (User.subscription_ends > now + timedelta(hours=23)) & (User.failed_payments == 0)) |
+                    ((User.subscription_ends <= now + timedelta(hours=13)) & (User.subscription_ends > now + timedelta(hours=11)) & (User.failed_payments == 1)) |
+                    ((User.subscription_ends <= now + timedelta(hours=1)) & (User.subscription_ends > now) & (User.failed_payments == 2))
+                )
             )
         )
         return result.scalars().all()
 
-async def grant_grace_period(user_id: int, hours: int = 12):
-    """Grant bonus hours to user and increment failed_payments."""
-    async with async_session() as session:
-        result = await session.execute(select(User).where(User.id == user_id))
-        user = result.scalars().first()
-        if user:
-            now = datetime.now(timezone.utc)
-            start_from = max(user.subscription_ends, now)
-            user.subscription_ends = start_from + timedelta(hours=hours)
-            user.failed_payments += 1
-            await session.commit()
-            if user_id in sub_cache:
-                del sub_cache[user_id]
 
 async def increment_failed_payments(user_id: int) -> int:
     """Increment failed payment counter. Returns new count. Disables auto_renew at 3."""
@@ -208,7 +197,7 @@ async def get_users_expiring_tomorrow():
     async with async_session() as session:
         now = datetime.now(timezone.utc)
         lower = now + timedelta(hours=23)
-        upper = now + timedelta(hours=24)
+        upper = now + timedelta(hours=25)
         result = await session.execute(
             select(User).where(
                 User.is_active == True,
