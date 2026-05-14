@@ -129,6 +129,17 @@ async def toggle_auto_renew(user_id: int) -> bool:
             return user.auto_renew
     return False
 
+async def set_auto_renew(user_id: int, status: bool):
+    """Set auto-renewal status for user."""
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalars().first()
+        if user:
+            user.auto_renew = status
+            await session.commit()
+            if user_id in sub_cache:
+                del sub_cache[user_id]
+
 async def get_user_auto_renew_status(user_id: int) -> tuple:
     """Returns (auto_renew: bool, has_payment_method: bool)."""
     async with async_session() as session:

@@ -197,8 +197,9 @@ async def subscription_mgmt_callback(callback: CallbackQuery):
         text = f"✅ *Активна подписка*\n📅 Осталось: `{max(0, delta.days)} дн.`{renew_status}\n🔑 Ключ доступен по кнопке ниже."
         reply_markup = kb.subscription_management_menu(key=key, auto_renew=auto_renew, has_pm=has_pm)
     else:
-        text = "❌ *Нет активной подписки*"
-        reply_markup = kb.tariffs_menu()
+        trial_avail = await db.is_trial_available(callback.from_user.id)
+        text = "❌ *Подписка не активна.*\nАктивируйте её прямо сейчас, чтобы наслаждаться быстрым интернетом без границ! ✨"
+        reply_markup = kb.tariffs_menu(trial_available=trial_avail)
 
     if callback.message.photo:
         await callback.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -308,11 +309,17 @@ async def copy_key_callback(callback: CallbackQuery):
     else:
         await callback.answer("Ключ не найден. Сначала оформите подписку.", show_alert=True)
 
-@router.callback_query(F.data == "toggle_auto_renew")
-async def toggle_auto_renew_callback(callback: CallbackQuery):
-    new_state = await db.toggle_auto_renew(callback.from_user.id)
-    status = "включено ✅" if new_state else "выключено ❌"
-    await callback.answer(f"Автопродление {status}", show_alert=True)
+@router.callback_query(F.data == "disable_auto_renew")
+async def disable_auto_renew_callback(callback: CallbackQuery):
+    await db.set_auto_renew(callback.from_user.id, False)
+    await callback.answer("❌ Автопродление отключено", show_alert=True)
+    # Refresh the subscription management screen
+    await subscription_mgmt_callback(callback)
+
+@router.callback_query(F.data == "enable_auto_renew")
+async def enable_auto_renew_callback(callback: CallbackQuery):
+    await db.set_auto_renew(callback.from_user.id, True)
+    await callback.answer("✅ Автопродление включено", show_alert=True)
     # Refresh the subscription management screen
     await subscription_mgmt_callback(callback)
 @router.callback_query(F.data == "about")

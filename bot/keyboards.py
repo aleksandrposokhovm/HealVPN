@@ -47,8 +47,10 @@ def subscription_management_menu(key: str = None, auto_renew: bool = True, has_p
     
     # Only show auto-renew toggle if user has a saved payment method
     if has_pm:
-        status = "ВКЛ ✅" if auto_renew else "ВЫКЛ ❌"
-        buttons.append([InlineKeyboardButton(text=f"🔄 Автопродление: {status}", callback_data="toggle_auto_renew")])
+        if auto_renew:
+            buttons.append([InlineKeyboardButton(text="❌ Выключить автопродление", callback_data="disable_auto_renew")])
+        else:
+            buttons.append([InlineKeyboardButton(text="✅ Включить автопродление", callback_data="enable_auto_renew")])
     
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")])
     
