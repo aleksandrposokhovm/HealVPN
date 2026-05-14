@@ -88,7 +88,14 @@ async def main_menu_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data == "tariffs")
 async def tariffs_callback(callback: CallbackQuery):
-    trial_avail = await db.is_trial_available(callback.from_user.id)
+    sub = await db.get_user_subscription(callback.from_user.id)
+    is_active = sub[3] if sub else False
+    
+    # Show trial only if it's available AND user doesn't have an active subscription
+    trial_avail = False
+    if not is_active:
+        trial_avail = await db.is_trial_available(callback.from_user.id)
+        
     text = "💳 *Выберите количество устройств:*"
     reply_markup = kb.tariffs_menu(trial_available=trial_avail)
     if callback.message.photo:
