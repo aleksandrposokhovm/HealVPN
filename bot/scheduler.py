@@ -56,9 +56,13 @@ async def auto_renew_subscriptions(bot: Bot):
                 if not user.subscription_ends.tzinfo:
                     user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
 
-                # 2. Extend expiry in Marzban
+                # 2. Extend/Sync in Marzban
                 new_end = user.subscription_ends + timedelta(days=30)
                 expire_ts = int(new_end.timestamp())
+                
+                # Сначала убеждаемся, что юзер существует (create_user вернет 409 если он есть)
+                await marzban_api.create_user(username=str(user.id), expire=expire_ts)
+                # Затем принудительно обновляем дату (на случай если он уже был)
                 await marzban_api.update_user_expire(str(user.id), expire_ts)
                 
                 # 3. Extend in DB

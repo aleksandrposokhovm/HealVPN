@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy import select
-from .models import Base, User
+from sqlalchemy import select, update
+from .models import Base, User, ProcessedPayment
 from .config import config
 from datetime import datetime, timezone, timedelta
 import logging
@@ -56,44 +56,79 @@ async def get_user_subscription(user_id: int):
             
     return None
 
-async def activate_subscription(user_id: int, plan_name: str, duration_days: int, vpn_key: str):
+async def activate_subscription(user_id: int, plan_name: str, duration_days: int, vpn_key: str, payment_id: str = None, amount: float = None, plan: str = None):
+    """
+    Activates or extends a subscription. 
+    If payment_id is provided, also records it in ProcessedPayment table within the same transaction.
+    Uses with_for_update() to prevent race conditions.
+    """
     async with async_session() as session:
-        result = await session.execute(select(User).where(User.id == user_id))
-        user = result.scalars().first()
-        
-        if not user:
-            # Auto-create the user if they were missing from the DB
-            user = User(id=user_id, username=str(user_id), first_name="User")
-            session.add(user)
-            await session.commit() # Commit to ensure it exists
-            # We don't return here, we proceed to activate
+        async with session.begin():
+            # Use with_for_update() to lock the user row until the transaction commits
+            result = await session.execute(
+                select(User).where(User.id == user_id).with_for_update()
+            )
+            user = result.scalars().first()
             
-        now = datetime.now(timezone.utc)
-        
-        if user.subscription_ends:
-            if not user.subscription_ends.tzinfo:
-                user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
-            if user.subscription_ends > now:
-                start_from = user.subscription_ends
+            if not user:
+                user = User(id=user_id, username=str(user_id), first_name="User")
+                session.add(user)
+                # No need to commit yet, sqlalchemy will handle the sequence
+            
+            # Double check if payment was already processed by another task just in case
+            if payment_id:
+                check_pay = await session.execute(
+                    select(ProcessedPayment).where(ProcessedPayment.payment_id == payment_id)
+                )
+                if check_pay.scalars().first():
+                    logging.warning(f"Payment {payment_id} already processed, skipping activation.")
+                    return False
+
+            now = datetime.now(timezone.utc)
+            
+            if user.subscription_ends:
+                if not user.subscription_ends.tzinfo:
+                    user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
+                if user.subscription_ends > now:
+                    start_from = user.subscription_ends
+                else:
+                    start_from = now
             else:
                 start_from = now
-        else:
-            start_from = now
+                
+            user.subscription_ends = start_from + timedelta(days=duration_days)
+            user.is_active = True
+            user.vpn_key = vpn_key
+            user.available_devices = 5
+            user.last_payment_date = now
             
-        user.subscription_ends = start_from + timedelta(days=duration_days)
-        user.is_active = True
-        user.vpn_key = vpn_key
-        user.available_devices = 5
-        user.last_payment_date = now
-        
-        # If it's a trial (detected by duration or passed flag), set last_trial_date
-        if duration_days == 7: # 7 days is the new trial duration
-            user.last_trial_date = now
+            if duration_days == 7:
+                user.last_trial_date = now
             
-        await session.commit()
-        
+            # Record the payment ID persistently
+            if payment_id:
+                proc_payment = ProcessedPayment(
+                    payment_id=payment_id,
+                    user_id=user_id,
+                    amount=amount,
+                    plan=plan,
+                    processed_at=now
+                )
+                session.add(proc_payment)
+            
+            # Commit happens automatically at the end of 'async with session.begin()'
+            
         if user_id in sub_cache:
             del sub_cache[user_id]
+        return True
+
+async def is_payment_processed(payment_id: str) -> bool:
+    """Check if payment ID already exists in processed_payments table."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(ProcessedPayment).where(ProcessedPayment.payment_id == payment_id)
+        )
+        return result.scalars().first() is not None
 
 async def deactivate_expired_subscriptions():
     async with async_session() as session:

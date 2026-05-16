@@ -26,3 +26,13 @@ class User(Base):
     last_payment_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_trial_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+class ProcessedPayment(Base):
+    __tablename__ = "processed_payments"
+    
+    payment_id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount: Mapped[float] = mapped_column(nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), default="RUB")
+    plan: Mapped[str] = mapped_column(String(50), nullable=True)
+    processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

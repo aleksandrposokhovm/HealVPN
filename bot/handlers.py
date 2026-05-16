@@ -20,6 +20,16 @@ LOGO_PATH = os.path.normpath(os.path.join(
 ))
 LOGO_FILE_ID = None
 
+WELCOME_TEXT = (
+    "Вижу твой интерес! 👋 Позволь рассказать, почему HealVPN станет твоим лучшим выбором:\n\n"
+    "⚡️ **Скорость** — мгновенная загрузка любого контента.\n"
+    "🛡 **Приватность** — защита данных от слежки в любой сети.\n"
+    "🌐 **Доступ** — стабильная связь с глобальными ресурсами.\n"
+    "🖥 **Надёжность** — работа 24/7 и подключение в одно касание.\n\n"
+    "Ваш интернет под надёжной защитой. Жми кнопку ниже и лети! 🚀"
+)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, bot: Bot):
     global LOGO_FILE_ID
@@ -32,45 +42,38 @@ async def cmd_start(message: Message, bot: Bot):
     is_active = sub[3] if sub else False
     reply_markup = kb.main_menu(is_active=is_active, trial_available=trial_avail)
 
-    welcome_text = (
-        "Вижу твой интерес! 👋 Позволь рассказать, почему HealVPN станет твоим лучшим выбором:\n\n"
-        "⚡️ **Скорость** — мгновенная загрузка любого контента.\n"
-        "🛡 **Приватность** — защита данных от слежки в любой сети.\n"
-        "🌐 **Доступ** — стабильная связь с глобальными ресурсами.\n"
-        "🖥 **Надёжность** — работа 24/7 и подключение в одно касание.\n\n"
-        "Ваш интернет под надёжной защитой. Жми кнопку ниже и лети! 🚀"
-    )
-
     if os.path.exists(LOGO_PATH) or LOGO_FILE_ID:
         try:
             photo = LOGO_FILE_ID if LOGO_FILE_ID else FSInputFile(LOGO_PATH)
             sent_msg = await message.answer_photo(
                 photo=photo,
-                caption=welcome_text,
+                caption=WELCOME_TEXT,
                 reply_markup=reply_markup,
                 parse_mode="Markdown"
             )
+
             if not LOGO_FILE_ID:
                 LOGO_FILE_ID = sent_msg.photo[-1].file_id
         except Exception as e:
             logging.error(f"Error sending photo: {e}")
-            await message.answer(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+            await message.answer(WELCOME_TEXT, reply_markup=reply_markup, parse_mode="Markdown")
     else:
-        await message.answer(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+        await message.answer(WELCOME_TEXT, reply_markup=reply_markup, parse_mode="Markdown")
+
 
 @router.callback_query(F.data == "main_menu")
 async def main_menu_callback(callback: CallbackQuery):
     sub = await db.get_user_subscription(callback.from_user.id)
     is_active = sub[3] if sub else False
     trial_avail = await db.is_trial_available(callback.from_user.id)
-    text = "Главное меню:"
     reply_markup = kb.main_menu(is_active=is_active, trial_available=trial_avail)
 
     if callback.message.photo:
-        await callback.message.edit_caption(caption=text, reply_markup=reply_markup)
+        await callback.message.edit_caption(caption=WELCOME_TEXT, reply_markup=reply_markup, parse_mode="Markdown")
     else:
-        await callback.message.edit_text(text=text, reply_markup=reply_markup)
+        await callback.message.edit_text(text=WELCOME_TEXT, reply_markup=reply_markup, parse_mode="Markdown")
     await callback.answer()
+
 
 @router.callback_query(F.data == "tariffs")
 async def tariffs_callback(callback: CallbackQuery):
@@ -171,7 +174,7 @@ async def devices_callback(callback: CallbackQuery):
             if "id" not in payment:
                 raise Exception(f"Failed to create payment: {payment}")
 
-            text = ("💳 *Оплата подписки*\n\n"
+            text = ("💳 *Подписка на 1 месяц*\n\n"
                     "После завершения оплаты в браузере нажмите кнопку «✅ Проверить оплату».\n\n"
                     "Оплачивая подписку, вы соглашаетесь на её автопродление. Оно будет срабатывать за 24 часа до окончания срока действия текущего тарифа. Средства спишутся со счета, с которого был совершен последний платеж.\n\n"
                     "Отключить автопродление можно в любой момент в разделе «⚙️ Управление подпиской».")
@@ -235,113 +238,132 @@ async def check_payment_callback(callback: CallbackQuery):
     payment_id = callback.data.split(":")[1]
     user_id = callback.from_user.id
 
-    # Простая защита от двойных нажатий (idempotency cache)
+    # 1. Защита от быстрых двойных кликов в рамках одного процесса
     global processed_payments_cache
+    now = datetime.now(timezone.utc)
+    
     if payment_id in processed_payments_cache:
-        elapsed = (datetime.now(timezone.utc) - processed_payments_cache[payment_id]).total_seconds()
-        if elapsed < 86400:  # 1 day TTL
-            await callback.answer("Оплата уже обработана.", show_alert=True)
+        val = processed_payments_cache[payment_id]
+        if val == "processing":
+            await callback.answer("Проверка уже выполняется... ⏳", show_alert=True)
+            return
+        elif isinstance(val, datetime):
+            await callback.answer("Эта оплата уже была успешно обработана. ✅", show_alert=True)
             return
 
-    await callback.answer("Проверяю... ⏳")
+    # 2. Проверка в базе данных (защита от перезапусков бота и повторных попыток)
+    if await db.is_payment_processed(payment_id):
+        processed_payments_cache[payment_id] = now # Обновляем локальный кэш
+        await callback.answer("Эта оплата уже была успешно обработана. ✅", show_alert=True)
+        return
+
+    # Помечаем как "в обработке"
+    processed_payments_cache[payment_id] = "processing"
+    await callback.answer("Проверяю статус оплаты... ⏳")
 
     try:
         headers = get_yookassa_headers()
         async with httpx.AsyncClient() as client:
             response = await client.get(f"https://api.yookassa.ru/v3/payments/{payment_id}", headers=headers)
-
             if response.status_code != 200:
-                logging.error(f"YooKassa API Error: {response.status_code} - {response.text}")
-                response.raise_for_status()
-
+                raise Exception(f"YooKassa API Error: {response.status_code}")
             payment = response.json()
 
         if payment.get('status') == 'succeeded':
-            processed_payments_cache[payment_id] = datetime.now(timezone.utc)
+            # 3. Подготовка данных
             metadata = payment.get('metadata', {})
             plan = metadata.get('plan', '1_month')
             days = 7 if plan == 'trial_7_days' else 30
-
+            amount = float(payment.get('amount', {}).get('value', 0))
             marzban_username = str(user_id)
 
-            # Check existing subscription in DB to properly add days on renewal
+            # 4. Взаимодействие с Marzban
+            token = await marzban_api.get_token()
+            if not token:
+                raise Exception("Failed to get Marzban token")
+
+            # Рассчитываем время окончания для Marzban
             existing_sub = await db.get_user_subscription(user_id)
-            now_utc = datetime.now(timezone.utc)
-
+            base_ts = now
             if existing_sub and existing_sub[3] and existing_sub[1]:
-                # Active subscription exists — extend from its current end date
-                sub_end = existing_sub[1]
-                if not sub_end.tzinfo:
-                    sub_end = sub_end.replace(tzinfo=timezone.utc)
-                # If subscription is somehow in the past, extend from now
-                base_ts = max(sub_end, now_utc)
-            else:
-                # New subscription — start from now
-                base_ts = now_utc
-
+                sub_end = existing_sub[1].replace(tzinfo=timezone.utc) if not existing_sub[1].tzinfo else existing_sub[1]
+                base_ts = max(sub_end, now)
+            
             expire_ts = int(base_ts.timestamp()) + days * 24 * 3600
 
-            # Try to create user in Marzban (returns existing user on 409)
-            user_response = await marzban_api.create_user(
+            # Пытаемся создать пользователя (если он есть, API вернет 409 и метод get_user внутри)
+            await marzban_api.create_user(
                 username=marzban_username,
                 data_limit=0,
                 expire=expire_ts
             )
 
-            if user_response and ("subscription_url" in user_response or "links" in user_response):
-                sub_url = user_response.get("subscription_url")
-                
-                # Fallback to links if subscription_url is empty
-                if not sub_url and user_response.get("links"):
-                    sub_url = user_response["links"][0]
+            # КРИТИЧЕСКИЙ МОМЕНТ: Всегда обновляем срок действия, даже если юзер уже был в панели.
+            # Это решает проблему пропуска синхронизации даты.
+            await marzban_api.update_user_expire(marzban_username, expire_ts)
 
-                if not sub_url:
-                    logging.error(f"Failed to get subscription_url or links from Marzban for user {user_id}")
-                    await callback.answer("Ошибка при создании VPN аккаунта. Обратитесь в поддержку.", show_alert=True)
-                    return
+            # Получаем финальные данные пользователя, чтобы взять актуальную ссылку
+            user_response = await marzban_api.get_user(marzban_username)
+            if not user_response:
+                raise Exception(f"Failed to fetch user data for {marzban_username} after update")
 
-                # Ensure the subscription URL is an absolute HTTP link
-                if sub_url.startswith('/'):
-                    base_url = (config.MARZBAN_URL or config.VPN_API_URL).rstrip('/')
-                    sub_url = f"{base_url}{sub_url}"
+            # Приоритет отдаем subscription_url (связка подписки)
+            sub_url = user_response.get("subscription_url") or (user_response.get("links")[0] if user_response.get("links") else None)
+            
+            if not sub_url:
+                raise Exception("Failed to get subscription URL from Marzban")
 
-                # If user already existed in DB, we should ensure Marzban expire is updated
-                # even if their DB status was inactive (expired), because create_user might
-                # just return the existing expired Marzban user on 409.
-                if existing_sub:
-                    await marzban_api.update_user_expire(marzban_username, expire_ts)
+            if sub_url.startswith('/'):
+                base_url = (config.MARZBAN_URL or config.VPN_API_URL).rstrip('/')
+                sub_url = f"{base_url}{sub_url}"
 
-                # Health-check
-                is_valid = await marzban_api.validate_subscription(sub_url)
-                if not is_valid:
-                    logging.warning(f"Subscription URL for {marzban_username} failed health-check!")
-            else:
-                logging.error(f"Failed to get subscription_url from Marzban for user {user_id}")
-                await callback.answer("Ошибка при создании VPN аккаунта. Обратитесь в поддержку.", show_alert=True)
+            # 5. Атомарная активация в БД (включая запись ID платежа)
+            success = await db.activate_subscription(
+                user_id=user_id,
+                plan_name="Стандарт",
+                duration_days=days,
+                vpn_key=sub_url,
+                payment_id=payment_id,
+                amount=amount,
+                plan=plan
+            )
+
+            if not success:
+                # Значит платеж уже был обработан кем-то другим (race condition в БД пресечен)
+                await callback.answer("Эта оплата уже была успешно обработана. ✅", show_alert=True)
                 return
 
-            # Save payment method for auto-renewal
+            await db.reset_failed_payments(user_id)
+            
+            # Сохраняем метод оплаты для автопродления
             pm_id = payment.get("payment_method", {}).get("id")
             if pm_id:
                 await db.save_payment_method(user_id, pm_id)
-                logging.info(f"Saved payment method {pm_id} for user {user_id}")
 
-            # Save to DB — activate_subscription already handles adding days correctly
-            await db.activate_subscription(user_id, "Стандарт", days, sub_url)
-            await db.reset_failed_payments(user_id)
-
+            # 6. Финальное обновление кэша и интерфейса
+            processed_payments_cache[payment_id] = datetime.now(timezone.utc)
+            
             success_text = "✨ *Оплата прошла успешно!*\nВаша подписка активирована. 🚀"
             reply_markup = kb.success_payment_menu(sub_url)
-
+            
             if callback.message.photo:
                 await callback.message.edit_caption(caption=success_text, reply_markup=reply_markup, parse_mode="Markdown")
             else:
                 await callback.message.edit_text(text=success_text, reply_markup=reply_markup, parse_mode="Markdown")
+        
         else:
+            # Оплата еще не прошла — сбрасываем статус "в обработке", чтобы можно было нажать снова
+            if payment_id in processed_payments_cache:
+                del processed_payments_cache[payment_id]
             await callback.answer("Оплата еще не поступила. ⌛", show_alert=True)
+
     except Exception as e:
+        # В случае ошибки сбрасываем статус, чтобы пользователь мог попробовать еще раз
+        if payment_id in processed_payments_cache:
+            del processed_payments_cache[payment_id]
+        
         logging.error(f"Error in check_payment_callback: {e}", exc_info=True)
-        await callback.answer("Ошибка при проверке. Пожалуйста, обратитесь в поддержку.", show_alert=True)
+        await callback.answer("❌ Произошла неизвестная ошибка, пожалуйста, обратитесь к нашему менеджеру", show_alert=True)
 
 @router.callback_query(F.data == "copy_key")
 async def copy_key_callback(callback: CallbackQuery):
