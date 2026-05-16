@@ -3,9 +3,14 @@ import uuid
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
+from datetime import datetime, timezone, timedelta
+from sqlalchemy import select, or_
+from .models import User
 from . import database as db
 from .marzban_api import marzban_api
 from .config import config, get_yookassa_headers
+
+notified_cache = {}
 
 async def create_auto_payment(user_id: int, payment_method_id: str) -> dict:
     """Create an automatic payment using saved payment method. No user interaction needed."""
@@ -47,8 +52,11 @@ async def auto_renew_subscriptions(bot: Bot):
             payment = await create_auto_payment(user.id, user.payment_method_id)
             
             if payment.get("status") == "succeeded":
+                # Ensure timezone awareness to prevent incorrect local-time timestamp conversions
+                if not user.subscription_ends.tzinfo:
+                    user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
+
                 # 2. Extend expiry in Marzban
-                from datetime import timedelta
                 new_end = user.subscription_ends + timedelta(days=30)
                 expire_ts = int(new_end.timestamp())
                 await marzban_api.update_user_expire(str(user.id), expire_ts)
@@ -112,24 +120,25 @@ async def auto_renew_subscriptions(bot: Bot):
 
 async def notify_expiring_subscriptions(bot: Bot):
     """Background job: notify users whose subscription expires in 24h, 12h, or 30m (for manual renewal)."""
-    from datetime import datetime, timezone, timedelta
-    
     # 1. 24h Reminder (Manual only)
     # Window: 23.5 - 24.5 hours
     async with db.async_session() as session:
-        from sqlalchemy import select, or_
-        from .models import User
         now = datetime.now(timezone.utc)
         
         result = await session.execute(
             select(User).where(
                 User.is_active == True,
                 User.auto_renew == False, # Only for manual
-                User.subscription_ends >= now + timedelta(hours=23, minutes=30),
-                User.subscription_ends <= now + timedelta(hours=24, minutes=30)
+                User.subscription_ends >= now + timedelta(hours=23),
+                User.subscription_ends <= now + timedelta(hours=24, minutes=15)
             )
         )
         for user in result.scalars().all():
+            cache_key = f"{user.id}_24h"
+            if cache_key in notified_cache:
+                continue
+            notified_cache[cache_key] = True
+            
             try:
                 text = (
                     "⏰ *Напоминание (осталось 24 часа)*\n\n"
@@ -149,25 +158,38 @@ async def notify_expiring_subscriptions(bot: Bot):
                 User.is_active == True,
                 User.auto_renew == False,
                 or_(
-                    (User.subscription_ends >= now + timedelta(hours=11, minutes=30)) & (User.subscription_ends <= now + timedelta(hours=12, minutes=30)),
+                    (User.subscription_ends >= now + timedelta(hours=11)) & (User.subscription_ends <= now + timedelta(hours=12, minutes=15)),
                     (User.subscription_ends >= now) & (User.subscription_ends <= now + timedelta(hours=1))
                 )
             )
         )
         for user in result.scalars().all():
             try:
+                if not user.subscription_ends.tzinfo:
+                    user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
+
                 remains = user.subscription_ends - now
-                if timedelta(hours=11, minutes=30) <= remains <= timedelta(hours=12, minutes=30):
+                
+                if timedelta(hours=11) <= remains <= timedelta(hours=12, minutes=15):
+                    cache_key = f"{user.id}_12h"
+                    if cache_key in notified_cache: continue
+                    notified_cache[cache_key] = True
+                    
                     text = (
                         "⏳ *Важное уведомление (осталось 12 часов)*\n\n"
                         "До отключения VPN осталось всего 12 часов. Чтобы не остаться без любимых сервисов "
                         "в самый неподходящий момент, пожалуйста, продлите подписку в меню бота. ✨"
                     )
                     await bot.send_message(user.id, text, parse_mode="Markdown")
+                    
                 elif timedelta(seconds=0) <= remains <= timedelta(hours=1):
+                    cache_key = f"{user.id}_30m"
+                    if cache_key in notified_cache: continue
+                    notified_cache[cache_key] = True
+                    
                     text = (
-                        "🚨 *Финальный отсчет: 30 минут*\n\n"
-                        "Ваша подписка HealVPN истекает совсем скоро. Через полчаса доступ будет ограничен. "
+                        "🚨 *Финальный отсчет: менее часа*\n\n"
+                        "Ваша подписка HealVPN истекает совсем скоро. Скоро доступ будет ограничен. "
                         "Продлите его прямо сейчас в меню, чтобы не прерывать работу! 🚀"
                     )
                     await bot.send_message(user.id, text, parse_mode="Markdown")
@@ -190,29 +212,35 @@ async def notify_trial_available_again(bot: Bot):
 def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     
-    # Check for expired subscriptions every hour
+    # Run every 15 minutes, starting right now
+    now = datetime.now(timezone.utc)
+    
+    # Check for expired subscriptions
     scheduler.add_job(
         db.deactivate_expired_subscriptions,
         'interval',
-        hours=1,
+        minutes=15,
+        next_run_time=now,
         id='deactivate_expired'
     )
     
-    # Auto-renew subscriptions every hour
+    # Auto-renew subscriptions
     scheduler.add_job(
         auto_renew_subscriptions,
         'interval',
-        hours=1,
+        minutes=15,
         args=[bot],
+        next_run_time=now + timedelta(seconds=10),
         id='auto_renew'
     )
     
-    # Notify users about expiring subscriptions every hour
+    # Notify users about expiring subscriptions
     scheduler.add_job(
         notify_expiring_subscriptions,
         'interval',
-        hours=1,
+        minutes=15,
         args=[bot],
+        next_run_time=now + timedelta(seconds=20),
         id='notify_expiring'
     )
 

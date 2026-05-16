@@ -13,6 +13,7 @@ from .marzban_api import marzban_api
 
 router = Router()
 
+processed_payments_cache = {}
 LOGO_PATH = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "assets", "logo_horizontal.png"
@@ -105,7 +106,7 @@ async def trial_callback(callback: CallbackQuery):
 
     bot_info = await callback.bot.me()
     payment_data = {
-        "amount": {"value": "11.00", "currency": "RUB"},
+        "amount": {"value": f"{kb.PRICE_TRIAL}.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": f"https://t.me/{bot_info.username}"},
         "capture": True,
         "save_payment_method": True,
@@ -125,9 +126,9 @@ async def trial_callback(callback: CallbackQuery):
                 raise Exception(f"Failed to create trial payment: {payment}")
 
             text = ("🎁 *Пробный период на 7 дней*\n\n"
-                    "Стоимость: 11 рублей.\n\n"
+                    f"Стоимость: {kb.PRICE_TRIAL} рублей.\n\n"
                     "После завершения оплаты в браузере нажмите кнопку «✅ Проверить оплату».\n\n"
-                    "Оплачивая пробный период, вы активируете автопродление. Спустя неделю подписка будет продлена на стандартный месяц за 88₽ со счета привязанной карты.\n\n"
+                    f"Оплачивая пробный период, вы активируете автопродление. Спустя неделю подписка будет продлена на стандартный месяц за {kb.PRICE_MONTH}₽ со счета привязанной карты.\n\n"
                     "Автопродление срабатывает за 24 часа до окончания срока. Отключить его можно в любой момент в разделе «⚙️ Управление подпиской».")
             reply_markup = kb.pay_menu(payment["confirmation"]["confirmation_url"], payment['id'], is_trial=True)
 
@@ -151,7 +152,7 @@ async def devices_callback(callback: CallbackQuery):
 
     bot_info = await callback.bot.me()
     payment_data = {
-        "amount": {"value": "88.00", "currency": "RUB"},
+        "amount": {"value": f"{kb.PRICE_MONTH}.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": f"https://t.me/{bot_info.username}"},
         "capture": True,
         "save_payment_method": True,
@@ -209,12 +210,15 @@ async def subscription_mgmt_callback(callback: CallbackQuery):
             time_left = "0 дн. 0 ч. 0 мин."
 
         auto_renew, has_pm = await db.get_user_auto_renew_status(callback.from_user.id)
-        renew_status = ""
-        if has_pm:
-            renew_status = "\n🔄 Автопродление: " + ("ВКЛ" if auto_renew else "ВЫКЛ")
-
-        text = f"✅ *Активна подписка*\n📅 Осталось: `{time_left}`{renew_status}\n🔑 Ключ доступен по кнопке ниже."
-        reply_markup = kb.subscription_management_menu(key=key, auto_renew=auto_renew, has_pm=has_pm)
+        status_text = "ВКЛ" if auto_renew else "ВЫКЛ"
+        
+        text = (
+            f"✅ **Активна подписка**\n"
+            f"📅 **Осталось**: {time_left}\n"
+            f"🔄 **Автопродление**: {status_text}\n"
+            f"🔑 Ключ доступен по кнопке ниже."
+        )
+        reply_markup = kb.subscription_management_menu(key=key, auto_renew=auto_renew)
     else:
         trial_avail = await db.is_trial_available(callback.from_user.id)
         text = "❌ *Подписка не активна.*\nАктивируйте её прямо сейчас, чтобы наслаждаться быстрым интернетом без границ! ✨"
@@ -231,6 +235,14 @@ async def check_payment_callback(callback: CallbackQuery):
     payment_id = callback.data.split(":")[1]
     user_id = callback.from_user.id
 
+    # Простая защита от двойных нажатий (idempotency cache)
+    global processed_payments_cache
+    if payment_id in processed_payments_cache:
+        elapsed = (datetime.now(timezone.utc) - processed_payments_cache[payment_id]).total_seconds()
+        if elapsed < 86400:  # 1 day TTL
+            await callback.answer("Оплата уже обработана.", show_alert=True)
+            return
+
     await callback.answer("Проверяю... ⏳")
 
     try:
@@ -245,6 +257,7 @@ async def check_payment_callback(callback: CallbackQuery):
             payment = response.json()
 
         if payment.get('status') == 'succeeded':
+            processed_payments_cache[payment_id] = datetime.now(timezone.utc)
             metadata = payment.get('metadata', {})
             plan = metadata.get('plan', '1_month')
             days = 7 if plan == 'trial_7_days' else 30
@@ -275,11 +288,27 @@ async def check_payment_callback(callback: CallbackQuery):
                 expire=expire_ts
             )
 
-            if user_response and "subscription_url" in user_response:
-                sub_url = user_response["subscription_url"]
+            if user_response and ("subscription_url" in user_response or "links" in user_response):
+                sub_url = user_response.get("subscription_url")
+                
+                # Fallback to links if subscription_url is empty
+                if not sub_url and user_response.get("links"):
+                    sub_url = user_response["links"][0]
 
-                # If user already existed (renewal case), update their expire in Marzban
-                if existing_sub and existing_sub[3]:
+                if not sub_url:
+                    logging.error(f"Failed to get subscription_url or links from Marzban for user {user_id}")
+                    await callback.answer("Ошибка при создании VPN аккаунта. Обратитесь в поддержку.", show_alert=True)
+                    return
+
+                # Ensure the subscription URL is an absolute HTTP link
+                if sub_url.startswith('/'):
+                    base_url = (config.MARZBAN_URL or config.VPN_API_URL).rstrip('/')
+                    sub_url = f"{base_url}{sub_url}"
+
+                # If user already existed in DB, we should ensure Marzban expire is updated
+                # even if their DB status was inactive (expired), because create_user might
+                # just return the existing expired Marzban user on 409.
+                if existing_sub:
                     await marzban_api.update_user_expire(marzban_username, expire_ts)
 
                 # Health-check

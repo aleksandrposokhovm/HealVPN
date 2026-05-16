@@ -70,8 +70,13 @@ async def activate_subscription(user_id: int, plan_name: str, duration_days: int
             
         now = datetime.now(timezone.utc)
         
-        if user.subscription_ends and user.subscription_ends > now:
-            start_from = user.subscription_ends
+        if user.subscription_ends:
+            if not user.subscription_ends.tzinfo:
+                user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
+            if user.subscription_ends > now:
+                start_from = user.subscription_ends
+            else:
+                start_from = now
         else:
             start_from = now
             
@@ -123,6 +128,8 @@ async def set_auto_renew(user_id: int, status: bool):
         user = result.scalars().first()
         if user:
             user.auto_renew = status
+            if status:
+                user.failed_payments = 0
             await session.commit()
             if user_id in sub_cache:
                 del sub_cache[user_id]
@@ -257,6 +264,8 @@ async def update_subscription_date(user_id: int, expiry_date: datetime):
         result = await session.execute(select(User).where(User.id == user_id))
         user = result.scalars().first()
         if user:
+            if not expiry_date.tzinfo:
+                expiry_date = expiry_date.replace(tzinfo=timezone.utc)
             user.subscription_ends = expiry_date
             user.is_active = expiry_date > datetime.now(timezone.utc)
             await session.commit()

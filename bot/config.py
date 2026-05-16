@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     VPN_API_URL: str = ""
 
     # Marzban credentials (supports both MARZBAN_USERNAME and MARZBAN_ADMIN_USERNAME in .env)
+    MARZBAN_URL: str = ""
     MARZBAN_USERNAME: str = ""
     MARZBAN_PASSWORD: str = ""
     MARZBAN_ADMIN_USERNAME: str = ""
