@@ -214,7 +214,7 @@ async def subscription_mgmt_callback(callback: CallbackQuery):
 
         auto_renew, has_pm = await db.get_user_auto_renew_status(callback.from_user.id)
         status_text = "ВКЛ" if auto_renew else "ВЫКЛ"
-        
+
         text = (
             f"✅ **Активна подписка**\n"
             f"📅 **Осталось**: {time_left}\n"
@@ -241,7 +241,7 @@ async def check_payment_callback(callback: CallbackQuery):
     # 1. Защита от быстрых двойных кликов в рамках одного процесса
     global processed_payments_cache
     now = datetime.now(timezone.utc)
-    
+
     if payment_id in processed_payments_cache:
         val = processed_payments_cache[payment_id]
         if val == "processing":
@@ -278,38 +278,35 @@ async def check_payment_callback(callback: CallbackQuery):
             marzban_username = str(user_id)
 
             # 4. Взаимодействие с Marzban
-            token = await marzban_api.get_token()
-            if not token:
-                raise Exception("Failed to get Marzban token")
-
             # Рассчитываем время окончания для Marzban
             existing_sub = await db.get_user_subscription(user_id)
+            
             base_ts = now
             if existing_sub and existing_sub[3] and existing_sub[1]:
                 sub_end = existing_sub[1].replace(tzinfo=timezone.utc) if not existing_sub[1].tzinfo else existing_sub[1]
                 base_ts = max(sub_end, now)
-            
+
             expire_ts = int(base_ts.timestamp()) + days * 24 * 3600
 
-            # Пытаемся создать пользователя (если он есть, API вернет 409 и метод get_user внутри)
-            await marzban_api.create_user(
+            # 1. Убеждаемся, что пользователь существует. Если существует - метод вернет его данные (409 Conflict)
+            user_response = await marzban_api.create_user(
                 username=marzban_username,
                 data_limit=0,
                 expire=expire_ts
             )
-
-            # КРИТИЧЕСКИЙ МОМЕНТ: Всегда обновляем срок действия, даже если юзер уже был в панели.
-            # Это решает проблему пропуска синхронизации даты.
+            
+            # 2. Обновляем дату истечения. Наш метод update_user_expire теперь сохраняет токен, 
+            # что гарантирует сохранение прежней ссылки для пользователя.
             await marzban_api.update_user_expire(marzban_username, expire_ts)
 
-            # Получаем финальные данные пользователя, чтобы взять актуальную ссылку
+            # 3. Получаем финальные данные пользователя, чтобы взять актуальную ссылку (она не должна измениться)
             user_response = await marzban_api.get_user(marzban_username)
             if not user_response:
                 raise Exception(f"Failed to fetch user data for {marzban_username} after update")
 
             # Приоритет отдаем subscription_url (связка подписки)
             sub_url = user_response.get("subscription_url") or (user_response.get("links")[0] if user_response.get("links") else None)
-            
+
             if not sub_url:
                 raise Exception("Failed to get subscription URL from Marzban")
 
@@ -334,7 +331,7 @@ async def check_payment_callback(callback: CallbackQuery):
                 return
 
             await db.reset_failed_payments(user_id)
-            
+
             # Сохраняем метод оплаты для автопродления
             pm_id = payment.get("payment_method", {}).get("id")
             if pm_id:
@@ -342,15 +339,16 @@ async def check_payment_callback(callback: CallbackQuery):
 
             # 6. Финальное обновление кэша и интерфейса
             processed_payments_cache[payment_id] = datetime.now(timezone.utc)
-            
+
             success_text = "✨ *Оплата прошла успешно!*\nВаша подписка активирована. 🚀"
+                
             reply_markup = kb.success_payment_menu(sub_url)
-            
+
             if callback.message.photo:
                 await callback.message.edit_caption(caption=success_text, reply_markup=reply_markup, parse_mode="Markdown")
             else:
                 await callback.message.edit_text(text=success_text, reply_markup=reply_markup, parse_mode="Markdown")
-        
+
         else:
             # Оплата еще не прошла — сбрасываем статус "в обработке", чтобы можно было нажать снова
             if payment_id in processed_payments_cache:
@@ -361,7 +359,7 @@ async def check_payment_callback(callback: CallbackQuery):
         # В случае ошибки сбрасываем статус, чтобы пользователь мог попробовать еще раз
         if payment_id in processed_payments_cache:
             del processed_payments_cache[payment_id]
-        
+
         logging.error(f"Error in check_payment_callback: {e}", exc_info=True)
         await callback.answer("❌ Произошла неизвестная ошибка, пожалуйста, обратитесь к нашему менеджеру", show_alert=True)
 

@@ -8,7 +8,7 @@ class MarzbanAPI:
     """Async client for Marzban panel API."""
 
     def __init__(self):
-        self.base_url = config.VPN_API_URL.rstrip('/')
+        self.base_url = (config.MARZBAN_URL or config.VPN_API_URL).rstrip('/')
         # Support both naming conventions from .env
         self.username = config.MARZBAN_ADMIN_USERNAME or config.MARZBAN_USERNAME
         self.password = config.MARZBAN_ADMIN_PASSWORD or config.MARZBAN_PASSWORD
@@ -125,10 +125,16 @@ class MarzbanAPI:
     async def update_user_expire(self, username: str, expire_ts: int, _retry: bool = False) -> bool:
         """
         Update the expiry timestamp for an existing Marzban user.
-        Called when a user renews their subscription to keep Marzban in sync.
+        Preserves existing user data (proxies, data_limit, etc.) to avoid resets.
         """
         token = await self.get_token()
         if not token:
+            return False
+
+        # 1. Fetch current user data to preserve it
+        current_user = await self.get_user(username)
+        if not current_user:
+            logging.error(f"Cannot update user {username}: user not found in Marzban")
             return False
 
         headers = {
@@ -136,10 +142,31 @@ class MarzbanAPI:
             "Content-Type": "application/json",
         }
 
+        # 2. Prepare payload by keeping existing essential fields
+        # We only want to update 'expire' and 'status' while preserving everything else
+        payload = {
+            "proxies": current_user.get("proxies"),
+            "inbounds": current_user.get("inbounds"),
+            "expire": expire_ts,
+            "data_limit": current_user.get("data_limit"),
+            "data_limit_reset_strategy": current_user.get("data_limit_reset_strategy"),
+            "status": "active",
+            "note": current_user.get("note"),
+            "on_hold_timeout": current_user.get("on_hold_timeout"),
+            "on_hold_expire_duration": current_user.get("on_hold_expire_duration"),
+        }
+        
+        # If user has a token, we MUST preserve it to keep the subscription link the same
+        if current_user.get("token"):
+            payload["token"] = current_user["token"]
+
+        # Remove None values to avoid overwriting with defaults if field is missing in response
+        payload = {k: v for k, v in payload.items() if v is not None}
+
         try:
             response = await self.get_client().put(
                 f"{self.base_url}/api/user/{username}",
-                json={"expire": expire_ts, "status": "active"},
+                json=payload,
                 headers=headers,
             )
             if response.status_code == 401 and not _retry:
