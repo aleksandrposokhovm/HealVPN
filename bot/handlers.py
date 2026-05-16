@@ -315,11 +315,16 @@ async def check_payment_callback(callback: CallbackQuery):
                 sub_url = f"{base_url}{sub_url}"
 
             # 5. Атомарная активация в БД (включая запись ID платежа)
+            # ПРИНЦИПИАЛЬНО: Мы сохраняем СТАРЫЙ ключ, если он уже есть в базе,
+            # чтобы у пользователя не менялась ссылка в приложении.
+            existing_key = existing_sub[2] if existing_sub else None
+            vpn_key_to_save = existing_key if existing_key else sub_url
+
             success = await db.activate_subscription(
                 user_id=user_id,
                 plan_name="Стандарт",
                 duration_days=days,
-                vpn_key=sub_url,
+                vpn_key=vpn_key_to_save,
                 payment_id=payment_id,
                 amount=amount,
                 plan=plan
@@ -342,7 +347,7 @@ async def check_payment_callback(callback: CallbackQuery):
 
             success_text = "✨ *Оплата прошла успешно!*\nВаша подписка активирована. 🚀"
                 
-            reply_markup = kb.success_payment_menu(sub_url)
+            reply_markup = kb.success_payment_menu(vpn_key_to_save)
 
             if callback.message.photo:
                 await callback.message.edit_caption(caption=success_text, reply_markup=reply_markup, parse_mode="Markdown")

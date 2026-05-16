@@ -157,8 +157,14 @@ class MarzbanAPI:
         }
         
         # If user has a token, we MUST preserve it to keep the subscription link the same
-        if current_user.get("token"):
-            payload["token"] = current_user["token"]
+        token_to_preserve = current_user.get("token")
+        if not token_to_preserve and current_user.get("subscription_url"):
+            sub_url = current_user.get("subscription_url")
+            if "/sub/" in sub_url:
+                token_to_preserve = sub_url.split("/sub/")[-1]
+
+        if token_to_preserve:
+            payload["token"] = token_to_preserve
 
         # Remove None values to avoid overwriting with defaults if field is missing in response
         payload = {k: v for k, v in payload.items() if v is not None}
