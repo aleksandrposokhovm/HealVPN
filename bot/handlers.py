@@ -1,14 +1,12 @@
 import os
 import uuid
-import base64
 import httpx
 import logging
-import asyncio
 from datetime import datetime, timezone
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.filters import CommandStart, Command
-from .config import config
+from .config import config, get_yookassa_headers
 from . import keyboards as kb
 from . import database as db
 from .marzban_api import marzban_api
@@ -20,19 +18,6 @@ LOGO_PATH = os.path.normpath(os.path.join(
     "assets", "logo_horizontal.png"
 ))
 LOGO_FILE_ID = None
-
-_yookassa_headers = None
-def get_yookassa_headers():
-    global _yookassa_headers
-    if _yookassa_headers is None:
-        auth_str = f"{config.YOOKASSA_SHOP_ID}:{config.YOOKASSA_SECRET_KEY.get_secret_value()}"
-        auth_bytes = auth_str.encode('ascii')
-        base64_auth = base64.b64encode(auth_bytes).decode('ascii')
-        _yookassa_headers = {
-            "Authorization": f"Basic {base64_auth}",
-            "Content-Type": "application/json"
-        }
-    return _yookassa_headers
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, bot: Bot):
@@ -106,6 +91,18 @@ async def tariffs_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data == "trial")
 async def trial_callback(callback: CallbackQuery):
+    # Verify trial is still available before creating payment
+    trial_avail = await db.is_trial_available(callback.from_user.id)
+    if not trial_avail:
+        await callback.answer("❌ Пробный период уже был использован.", show_alert=True)
+        return
+
+    # Health-check Marzban before accepting payment
+    token = await marzban_api.get_token()
+    if not token:
+        await callback.answer("❌ Ошибка соединения с сервером VPN. Попробуйте позже.", show_alert=True)
+        return
+
     bot_info = await callback.bot.me()
     payment_data = {
         "amount": {"value": "11.00", "currency": "RUB"},
@@ -130,8 +127,8 @@ async def trial_callback(callback: CallbackQuery):
             text = ("🎁 *Пробный период на 7 дней*\n\n"
                     "Стоимость: 11 рублей.\n\n"
                     "После завершения оплаты в браузере нажмите кнопку «✅ Проверить оплату».\n\n"
-                    "Оплачивая пробный период, вы активируете автопродление. Спустя неделю подписка будет продлена на стандартный месяц за 111₽ со счета привязанной карты.\n\n"
-                    "Отключить автопродление можно в любой момент в разделе «⚙️ Управление подпиской».")
+                    "Оплачивая пробный период, вы активируете автопродление. Спустя неделю подписка будет продлена на стандартный месяц за 88₽ со счета привязанной карты.\n\n"
+                    "Автопродление срабатывает за 24 часа до окончания срока. Отключить его можно в любой момент в разделе «⚙️ Управление подпиской».")
             reply_markup = kb.pay_menu(payment["confirmation"]["confirmation_url"], payment['id'], is_trial=True)
 
             if callback.message.photo:
@@ -146,9 +143,15 @@ async def trial_callback(callback: CallbackQuery):
 
 @router.callback_query(F.data == "devices_5")
 async def devices_callback(callback: CallbackQuery):
+    # Health-check Marzban before accepting payment
+    token = await marzban_api.get_token()
+    if not token:
+        await callback.answer("❌ Ошибка соединения с сервером VPN. Попробуйте позже.", show_alert=True)
+        return
+
     bot_info = await callback.bot.me()
     payment_data = {
-        "amount": {"value": "111.00", "currency": "RUB"},
+        "amount": {"value": "88.00", "currency": "RUB"},
         "confirmation": {"type": "redirect", "return_url": f"https://t.me/{bot_info.username}"},
         "capture": True,
         "save_payment_method": True,
@@ -169,7 +172,7 @@ async def devices_callback(callback: CallbackQuery):
 
             text = ("💳 *Оплата подписки*\n\n"
                     "После завершения оплаты в браузере нажмите кнопку «✅ Проверить оплату».\n\n"
-                    "Оплачивая подписку, вы соглашаетесь на её автопродление. Оно будет срабатывать за 12 часов до окончания срока действия текущего тарифа. Средства спишутся со счета, с которого был совершен последний платеж.\n\n"
+                    "Оплачивая подписку, вы соглашаетесь на её автопродление. Оно будет срабатывать за 24 часа до окончания срока действия текущего тарифа. Средства спишутся со счета, с которого был совершен последний платеж.\n\n"
                     "Отключить автопродление можно в любой момент в разделе «⚙️ Управление подпиской».")
             reply_markup = kb.pay_menu(payment["confirmation"]["confirmation_url"], payment['id'])
 
@@ -355,4 +358,7 @@ async def status_cmd(message: Message):
 
 @router.message()
 async def save_text(message: Message):
-    await message.answer("Используйте кнопки меню!", reply_markup=kb.main_menu())
+    sub = await db.get_user_subscription(message.from_user.id)
+    is_active = sub[3] if sub else False
+    trial_avail = await db.is_trial_available(message.from_user.id)
+    await message.answer("Используйте кнопки меню!", reply_markup=kb.main_menu(is_active=is_active, trial_available=trial_avail))

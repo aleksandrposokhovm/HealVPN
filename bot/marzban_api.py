@@ -40,7 +40,8 @@ class MarzbanAPI:
                 return ""
 
     async def create_user(
-        self, username: str, data_limit: int = 0, expire: int = 0
+        self, username: str, data_limit: int = 0, expire: int = 0,
+        _retry: bool = False
     ) -> Optional[Dict[str, Any]]:
         """
         Create a user in Marzban and return the full API response dict.
@@ -71,9 +72,12 @@ class MarzbanAPI:
                     f"{self.base_url}/api/user", json=payload, headers=headers
                 )
 
-                if response.status_code == 401:
+                if response.status_code == 401 and not _retry:
                     self.token = None # Reset token on unauthorized
-                    return await self.create_user(username, data_limit, expire)
+                    return await self.create_user(username, data_limit, expire, _retry=True)
+                elif response.status_code == 401:
+                    logging.error("Marzban auth failed after retry")
+                    return None
 
                 if response.status_code == 409:
                     logging.info(
@@ -90,7 +94,7 @@ class MarzbanAPI:
                 logging.error(f"Error creating user in Marzban: {e}")
                 return None
 
-    async def get_user(self, username: str) -> Optional[Dict[str, Any]]:
+    async def get_user(self, username: str, _retry: bool = False) -> Optional[Dict[str, Any]]:
         """Fetch existing user info from Marzban."""
         token = await self.get_token()
         if not token:
@@ -103,16 +107,19 @@ class MarzbanAPI:
                 response = await client.get(
                     f"{self.base_url}/api/user/{username}", headers=headers
                 )
-                if response.status_code == 401:
+                if response.status_code == 401 and not _retry:
                     self.token = None # Reset token on unauthorized
-                    return await self.get_user(username)
+                    return await self.get_user(username, _retry=True)
+                elif response.status_code == 401:
+                    logging.error("Marzban auth failed after retry")
+                    return None
                 response.raise_for_status()
                 return response.json()
             except Exception as e:
                 logging.error(f"Error getting user from Marzban: {e}")
                 return None
 
-    async def update_user_expire(self, username: str, expire_ts: int) -> bool:
+    async def update_user_expire(self, username: str, expire_ts: int, _retry: bool = False) -> bool:
         """
         Update the expiry timestamp for an existing Marzban user.
         Called when a user renews their subscription to keep Marzban in sync.
@@ -133,9 +140,12 @@ class MarzbanAPI:
                     json={"expire": expire_ts, "status": "active"},
                     headers=headers,
                 )
-                if response.status_code == 401:
+                if response.status_code == 401 and not _retry:
                     self.token = None # Reset token on unauthorized
-                    return await self.update_user_expire(username, expire_ts)
+                    return await self.update_user_expire(username, expire_ts, _retry=True)
+                elif response.status_code == 401:
+                    logging.error("Marzban auth failed after retry")
+                    return False
                 response.raise_for_status()
                 logging.info(f"Updated Marzban expire for user {username} to {expire_ts}")
                 return True

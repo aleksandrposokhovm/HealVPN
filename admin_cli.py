@@ -3,6 +3,7 @@ import argparse
 import sys
 from datetime import datetime, timezone
 from bot.database import delete_user, update_subscription_date, async_session
+from bot.marzban_api import marzban_api
 from bot.models import User
 from sqlalchemy import select
 
@@ -55,12 +56,22 @@ async def main():
         try:
             # Parse date and set to UTC midnight
             dt = datetime.strptime(args.date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            # Add some time to make it end of day or just keep it midnight
-            success = await update_subscription_date(args.user_id, dt)
-            if success:
-                print(f"Successfully updated subscription for {args.user_id} to {dt}")
+            
+            # 1. Update Marzban first
+            expire_ts = int(dt.timestamp())
+            marzban_success = await marzban_api.update_user_expire(str(args.user_id), expire_ts)
+            
+            if not marzban_success:
+                print(f"⚠️ Warning: Could not update Marzban for user {args.user_id}. Proceeding with DB update anyway.")
+
+            # 2. Update Database
+            db_success = await update_subscription_date(args.user_id, dt)
+            if db_success:
+                print(f"✅ Successfully updated subscription for {args.user_id} to {dt}")
+                if marzban_success:
+                    print(f"✅ Marzban panel also updated.")
             else:
-                print(f"User {args.user_id} not found.")
+                print(f"❌ User {args.user_id} not found in database.")
         except ValueError:
             print("Invalid date format. Use YYYY-MM-DD.")
 

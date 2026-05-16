@@ -85,8 +85,8 @@ nav {
     width: 32px;
     height: 32px;
     background-color: currentColor;
-    -webkit-mask: url('assets/logo.svg') no-repeat center;
-    mask: url('assets/logo.svg') no-repeat center;
+    -webkit-mask: url('bot/assets/logo.svg') no-repeat center;
+    mask: url('bot/assets/logo.svg') no-repeat center;
     -webkit-mask-size: contain;
     mask-size: contain;
 }

@@ -20,7 +20,7 @@ class User(Base):
     
     # Auto-renewal fields
     payment_method_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    auto_renew: Mapped[bool] = mapped_column(Boolean, default=True)
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=False)
     failed_payments: Mapped[int] = mapped_column(Integer, default=0)
     
     last_payment_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

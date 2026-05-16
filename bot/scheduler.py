@@ -1,21 +1,11 @@
 import logging
 import uuid
-import base64
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
 from . import database as db
 from .marzban_api import marzban_api
-from .config import config
-
-def get_yookassa_headers():
-    auth_str = f"{config.YOOKASSA_SHOP_ID}:{config.YOOKASSA_SECRET_KEY.get_secret_value()}"
-    auth_bytes = auth_str.encode('ascii')
-    base64_auth = base64.b64encode(auth_bytes).decode('ascii')
-    return {
-        "Authorization": f"Basic {base64_auth}",
-        "Content-Type": "application/json"
-    }
+from .config import config, get_yookassa_headers
 
 async def create_auto_payment(user_id: int, payment_method_id: str) -> dict:
     """Create an automatic payment using saved payment method. No user interaction needed."""
@@ -23,7 +13,7 @@ async def create_auto_payment(user_id: int, payment_method_id: str) -> dict:
     headers["Idempotence-Key"] = str(uuid.uuid4())
     
     data = {
-        "amount": {"value": "111.00", "currency": "RUB"},
+        "amount": {"value": "88.00", "currency": "RUB"},
         "capture": True,
         "payment_method_id": payment_method_id,
         "description": f"Автопродление HealVPN для пользователя {user_id}"
@@ -47,6 +37,12 @@ async def auto_renew_subscriptions(bot: Bot):
     
     for user in users:
         try:
+            # Pre-check Marzban connection before attempting to charge
+            token = await marzban_api.get_token()
+            if not token:
+                logging.error(f"Auto-renew skipped for {user.id} because Marzban is unreachable.")
+                continue
+
             # 1. Create auto-payment via YooKassa
             payment = await create_auto_payment(user.id, user.payment_method_id)
             
@@ -66,7 +62,7 @@ async def auto_renew_subscriptions(bot: Bot):
                     await bot.send_message(
                         user.id,
                         "✅ *Подписка автоматически продлена* на 30 дней!\n"
-                        "💳 Списано: 111 ₽",
+                        "💳 Списано: 88 ₽",
                         parse_mode="Markdown"
                     )
                 except Exception:

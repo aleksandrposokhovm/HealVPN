@@ -4,6 +4,7 @@ from .models import Base, User
 from .config import config
 from datetime import datetime, timezone, timedelta
 import logging
+import time
 
 engine = create_async_engine(config.DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -31,7 +32,6 @@ async def add_user(user_id: int, username: str, first_name: str):
         await session.commit()
 
 async def get_user_subscription(user_id: int):
-    import time
     now = time.time()
     
     if user_id in sub_cache:
@@ -191,21 +191,8 @@ async def reset_failed_payments(user_id: int):
         if user:
             user.failed_payments = 0
             await session.commit()
-
-async def get_users_expiring_tomorrow():
-    """Find users whose subscription expires in 23-25 hours (for day-before notification)."""
-    async with async_session() as session:
-        now = datetime.now(timezone.utc)
-        lower = now + timedelta(hours=23)
-        upper = now + timedelta(hours=25)
-        result = await session.execute(
-            select(User).where(
-                User.is_active == True,
-                User.subscription_ends >= lower,
-                User.subscription_ends <= upper,
-            )
-        )
-        return result.scalars().all()
+            if user_id in sub_cache:
+                del sub_cache[user_id]
 
 async def is_trial_available(user_id: int) -> bool:
     """Check if user can use the trial period (never or more than 3 months ago since ANY subscription ended)."""
