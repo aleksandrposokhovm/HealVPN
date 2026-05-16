@@ -15,6 +15,21 @@ class MarzbanAPI:
         self.token: Optional[str] = None
         self._client: Optional[httpx.AsyncClient] = None
 
+    def extract_token(self, url: str) -> Optional[str]:
+        """Safely extract token from subscription URL or VLESS link."""
+        if not url:
+            return None
+        if "/sub/" in url:
+            try:
+                # Extract part after /sub/
+                part = url.split('/sub/')[1]
+                # Remove query params, fragments, and trailing slashes
+                token = part.split('?')[0].split('#')[0].split('/')[0]
+                return token if token else None
+            except Exception:
+                return None
+        return None
+
     def get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(verify=False)
@@ -46,6 +61,7 @@ class MarzbanAPI:
 
     async def create_user(
         self, username: str, data_limit: int = 0, expire: int = 0,
+        forced_token: Optional[str] = None, proxies: Optional[Dict] = None,
         _retry: bool = False
     ) -> Optional[Dict[str, Any]]:
         """
@@ -63,13 +79,17 @@ class MarzbanAPI:
 
         payload = {
             "username": username,
-            "proxies": {"vless": {}},
+            "proxies": proxies or {"vless": {}},
             "inbounds": {},
             "data_limit": data_limit,
             "expire": expire,
             "data_limit_reset_strategy": "no_reset",
             "status": "active",
         }
+        
+        if forced_token:
+            payload["token"] = forced_token
+            payload["subscription_url_token"] = forced_token
 
         try:
             response = await self.get_client().post(
@@ -78,7 +98,7 @@ class MarzbanAPI:
 
             if response.status_code == 401 and not _retry:
                 self.token = None # Reset token on unauthorized
-                return await self.create_user(username, data_limit, expire, _retry=True)
+                return await self.create_user(username, data_limit, expire, forced_token, proxies, _retry=True)
             elif response.status_code == 401:
                 logging.error("Marzban auth failed after retry")
                 return None
@@ -122,19 +142,10 @@ class MarzbanAPI:
             logging.error(f"Error getting user from Marzban: {e}")
             return None
 
-    async def update_user_expire(self, username: str, expire_ts: int, _retry: bool = False) -> bool:
-        """
-        Update the expiry timestamp for an existing Marzban user.
-        Preserves existing user data (proxies, data_limit, etc.) to avoid resets.
-        """
+    async def update_user(self, username: str, payload: Dict[str, Any], _retry: bool = False) -> bool:
+        """Generic PUT /api/user/{username} update."""
         token = await self.get_token()
         if not token:
-            return False
-
-        # 1. Fetch current user data to preserve it
-        current_user = await self.get_user(username)
-        if not current_user:
-            logging.error(f"Cannot update user {username}: user not found in Marzban")
             return False
 
         headers = {
@@ -142,51 +153,132 @@ class MarzbanAPI:
             "Content-Type": "application/json",
         }
 
-        # 2. Prepare payload by keeping existing essential fields
-        # We only want to update 'expire' and 'status' while preserving everything else
-        payload = {
-            "proxies": current_user.get("proxies"),
-            "inbounds": current_user.get("inbounds"),
-            "expire": expire_ts,
-            "data_limit": current_user.get("data_limit"),
-            "data_limit_reset_strategy": current_user.get("data_limit_reset_strategy"),
-            "status": "active",
-            "note": current_user.get("note"),
-            "on_hold_timeout": current_user.get("on_hold_timeout"),
-            "on_hold_expire_duration": current_user.get("on_hold_expire_duration"),
-        }
-        
-        # If user has a token, we MUST preserve it to keep the subscription link the same
-        token_to_preserve = current_user.get("token")
-        if not token_to_preserve and current_user.get("subscription_url"):
-            sub_url = current_user.get("subscription_url")
-            if "/sub/" in sub_url:
-                token_to_preserve = sub_url.split("/sub/")[-1]
-
-        if token_to_preserve:
-            payload["token"] = token_to_preserve
-
-        # Remove None values to avoid overwriting with defaults if field is missing in response
-        payload = {k: v for k, v in payload.items() if v is not None}
-
         try:
+            logging.info(f"Updating user {username} in Marzban...")
             response = await self.get_client().put(
                 f"{self.base_url}/api/user/{username}",
                 json=payload,
                 headers=headers,
             )
+
             if response.status_code == 401 and not _retry:
-                self.token = None # Reset token on unauthorized
-                return await self.update_user_expire(username, expire_ts, _retry=True)
-            elif response.status_code == 401:
-                logging.error("Marzban auth failed after retry")
+                self.token = None
+                return await self.update_user(username, payload, _retry=True)
+
+            if response.status_code != 200:
+                logging.error(f"Failed to update user {username}. Status: {response.status_code}, Body: {response.text}")
                 return False
-            response.raise_for_status()
-            logging.info(f"Updated Marzban expire for user {username} to {expire_ts}")
+
             return True
         except Exception as e:
-            logging.error(f"Error updating Marzban user expire for {username}: {e}")
+            logging.error(f"Error in update_user for {username}: {e}")
             return False
+
+    async def delete_user(self, username: str, _retry: bool = False) -> bool:
+        """DELETE /api/user/{username}."""
+        token = await self.get_token()
+        if not token:
+            return False
+
+        headers = {"Authorization": f"Bearer {token}"}
+
+        try:
+            logging.info(f"Deleting user {username} from Marzban...")
+            response = await self.get_client().delete(
+                f"{self.base_url}/api/user/{username}",
+                headers=headers,
+            )
+
+            if response.status_code == 401 and not _retry:
+                self.token = None
+                return await self.delete_user(username, _retry=True)
+
+            if response.status_code not in [200, 204]:
+                logging.error(f"Failed to delete user {username}. Status: {response.status_code}")
+                return False
+
+            return True
+        except Exception as e:
+            logging.error(f"Error in delete_user for {username}: {e}")
+            return False
+
+    async def sync_user_subscription(self, username: str, expire_ts: int, forced_token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Unified method to ensure user exists and has updated expiration.
+        Strictly preserves existing token/link.
+        Returns the full user object from Marzban after sync.
+        """
+        # 1. Fetch current state
+        current_user = await self.get_user(username)
+        
+        if not current_user:
+            # Create new user
+            logging.info(f"User {username} not found in Marzban, creating new...")
+            # Use default proxies if none provided, or better: try to keep it empty if Marzban handles it
+            user_data = await self.create_user(username, expire=expire_ts, forced_token=forced_token)
+            return user_data
+
+        # 2. User exists, prepare update to preserve everything except expiration and status
+        # We MUST include the token to prevent Marzban from regenerating it
+        token_to_use = forced_token
+        if not token_to_use:
+            token_to_use = current_user.get("token")
+        
+        # Extra extraction from subscription_url or links if 'token' field is missing
+        if not token_to_use:
+            possible_urls = []
+            if current_user.get("subscription_url"):
+                possible_urls.append(current_user.get("subscription_url"))
+            if current_user.get("links"):
+                possible_urls.extend(current_user.get("links"))
+            
+            for url in possible_urls:
+                token_to_use = self.extract_token(url)
+                if token_to_use:
+                    logging.info(f"Extracted token {token_to_use[:12]}... from Marzban response for {username}")
+                    break
+
+        payload = {
+            "proxies": current_user.get("proxies") or {"vless": {}},
+            "inbounds": current_user.get("inbounds") or {},
+            "expire": expire_ts,
+            "data_limit": current_user.get("data_limit", 0),
+            "data_limit_reset_strategy": current_user.get("data_limit_reset_strategy", "no_reset"),
+            "status": "active",
+            "note": current_user.get("note") or "",
+            "on_hold_timeout": current_user.get("on_hold_timeout"),
+            "on_hold_expire_duration": current_user.get("on_hold_expire_duration", 0),
+            "token": token_to_use,
+            "subscription_url_token": token_to_use # Some versions use this field
+        }
+
+        # Add excluded_inbounds if it exists
+        if "excluded_inbounds" in current_user:
+            payload["excluded_inbounds"] = current_user["excluded_inbounds"]
+
+        # Remove None values
+        payload = {k: v for k, v in payload.items() if v is not None}
+        
+        if token_to_use:
+            logging.info(f"Syncing user {username}: explicitly preserving token {token_to_use[:12]}...")
+        else:
+            logging.warning(f"Syncing user {username}: NO TOKEN FOUND to preserve! Marzban might regenerate it.")
+
+        success = await self.update_user(username, payload)
+        
+        if success:
+            # Return fresh data
+            res = await self.get_user(username)
+            if res and token_to_use:
+                res["token"] = token_to_use # Ensure token is present in return
+            return res
+        
+        return None
+
+    async def update_user_expire(self, username: str, expire_ts: int, forced_token: Optional[str] = None) -> bool:
+        """Legacy wrapper for backward compatibility."""
+        res = await self.sync_user_subscription(username, expire_ts, forced_token)
+        return res is not None
 
     async def validate_subscription(self, sub_url: str) -> bool:
         """

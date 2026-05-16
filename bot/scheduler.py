@@ -60,13 +60,44 @@ async def auto_renew_subscriptions(bot: Bot):
                 new_end = user.subscription_ends + timedelta(days=30)
                 expire_ts = int(new_end.timestamp())
                 
-                # Сначала убеждаемся, что юзер существует (create_user вернет 409 если он есть)
-                await marzban_api.create_user(username=str(user.id), expire=expire_ts)
-                # Затем принудительно обновляем дату (на случай если он уже был)
-                await marzban_api.update_user_expire(str(user.id), expire_ts)
+                forced_token = marzban_api.extract_token(user.vpn_key)
+                if forced_token:
+                    logging.info(f"Auto-renew: extracted forced_token {forced_token[:12]}... for user {user.id}")
+
+                # Синхронизируем пользователя (создаст или обновит с сохранением токена)
+                user_res = await marzban_api.sync_user_subscription(
+                    username=str(user.id),
+                    expire_ts=expire_ts,
+                    forced_token=forced_token
+                )
                 
-                # 3. Extend in DB
-                await db.activate_subscription(user.id, "Стандарт", 30, user.vpn_key)
+                if not user_res:
+                    logging.error(f"Auto-renew: failed to sync user {user.id} in Marzban")
+                    continue
+                
+                # 3. Получаем актуальный ключ и проверяем преемственность
+                sub_url = user_res.get("subscription_url") or (user_res.get("links")[0] if user_res.get("links") else user.vpn_key)
+                if sub_url and sub_url.startswith('/'):
+                    base_url = (config.MARZBAN_URL or config.VPN_API_URL).rstrip('/')
+                    sub_url = f"{base_url}{sub_url}"
+                
+                new_key = sub_url
+                
+                new_token = marzban_api.extract_token(sub_url)
+                
+                actual_token = new_token or forced_token
+                old_token = marzban_api.extract_token(user.vpn_key)
+                
+                if old_token and actual_token and old_token == actual_token:
+                    new_key = user.vpn_key
+                    logging.info(f"Auto-renew: token matched for {user.id}, preserving existing key: {user.vpn_key}")
+                elif old_token and not new_token:
+                    new_key = user.vpn_key
+                    logging.info(f"Auto-renew: new link not sub, but old was. Preserving for {user.id}")
+
+                # 4. Extend in DB
+                await db.activate_subscription(user.id, "Стандарт", 30, new_key)
+
                 await db.reset_failed_payments(user.id)
                 
                 # 4. Notify user
