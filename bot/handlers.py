@@ -118,14 +118,12 @@ async def trial_callback(callback: CallbackQuery):
 
             if "id" not in payment:
                 raise Exception(f"Failed to create trial payment: {payment}")
-                
+
             await db.add_pending_payment(payment["id"], callback.from_user.id, "trial_7_days", float(kb.PRICE_TRIAL))
 
             text = ("🎁 *Пробный период на 7 дней*\n\n"
-                    f"Стоимость: {kb.PRICE_TRIAL} рублей.\n\n"
                     "После завершения оплаты в браузере нажмите кнопку «✅ Проверить оплату».\n\n"
-                    f"Оплачивая пробный период, вы активируете автопродление. Спустя неделю подписка будет продлена на стандартный месяц за {kb.PRICE_MONTH}₽ со счета привязанной карты.\n\n"
-                    "Автопродление срабатывает за 24 часа до окончания срока. Отключить его можно в любой момент в разделе «⚙️ Управление подпиской».")
+                    f"Оплачивая пробный период, вы активируете автопродление. Спустя 6 дней подписка будет продлена на стандартный месяц за {kb.PRICE_MONTH}₽ со счета привязанной карты. Автопродление срабатывает за 24 часа до окончания срока действия подписки. Отключить его можно в любой момент в разделе «⚙️ Управление подпиской».")
             reply_markup = kb.pay_menu(payment["confirmation"]["confirmation_url"], payment['id'], is_trial=True)
 
             await send_menu_with_logo(
@@ -175,7 +173,7 @@ async def devices_callback(callback: CallbackQuery):
 
             if "id" not in payment:
                 raise Exception(f"Failed to create payment: {payment}")
-                
+
             await db.add_pending_payment(payment["id"], callback.from_user.id, "1_month", float(kb.PRICE_MONTH))
 
             text = ("💳 *Подписка на 1 месяц*\n\n"
