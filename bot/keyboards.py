@@ -13,7 +13,7 @@ def main_menu(is_active=False, trial_available=False) -> InlineKeyboardMarkup:
     buttons = []
     
     if trial_available and not is_active:
-        buttons.append([InlineKeyboardButton(text=f"🎁 Попробовать 7 дней за {PRICE_TRIAL}₽", callback_data="trial")])
+        buttons.append([InlineKeyboardButton(text=f"🎁 Попробовать 7 дней за {PRICE_TRIAL}₽", callback_data="trial", style="danger")])
     
     buttons.extend([
         [InlineKeyboardButton(text=purchase_text, callback_data="tariffs", style="success")],
