@@ -9,7 +9,7 @@ PRICE_MONTH = 88
 
 def main_menu(is_active=False, trial_available=False) -> InlineKeyboardMarkup:
     """Main menu of the bot."""
-    purchase_text = "💳 Продлить подписку" if is_active else "💳 Приобрести подписку"
+    purchase_text = "💳 Продлить подписку на 30 дней" if is_active else "💳 Приобрести подписку на 30 дней"
     buttons = []
 
     if trial_available and not is_active:
@@ -24,14 +24,10 @@ def main_menu(is_active=False, trial_available=False) -> InlineKeyboardMarkup:
 
 def tariffs_menu(trial_available=False) -> InlineKeyboardMarkup:
     """Menu with available tariffs."""
-    buttons = []
-    if trial_available:
-        buttons.append([InlineKeyboardButton(text=f"🎁 Попробовать 7 дней за {PRICE_TRIAL}₽", callback_data="trial", style="danger")])
-
-    buttons.extend([
+    buttons = [
         [InlineKeyboardButton(text="📱 5 устройств", callback_data="devices_5", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
-    ])
+    ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def pay_menu(payment_url: str, payment_id: str, is_trial=False) -> InlineKeyboardMarkup:
