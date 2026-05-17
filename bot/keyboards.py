@@ -11,10 +11,10 @@ def main_menu(is_active=False, trial_available=False) -> InlineKeyboardMarkup:
     """Main menu of the bot."""
     purchase_text = "💳 Продлить подписку" if is_active else "💳 Приобрести подписку"
     buttons = []
-    
+
     if trial_available and not is_active:
         buttons.append([InlineKeyboardButton(text=f"🎁 Попробовать 7 дней за {PRICE_TRIAL}₽", callback_data="trial", style="danger")])
-    
+
     buttons.extend([
         [InlineKeyboardButton(text=purchase_text, callback_data="tariffs", style="success")],
         [InlineKeyboardButton(text="⚙️ Управление подпиской", callback_data="subscription_mgmt", style="success")],
@@ -26,8 +26,8 @@ def tariffs_menu(trial_available=False) -> InlineKeyboardMarkup:
     """Menu with available tariffs."""
     buttons = []
     if trial_available:
-        buttons.append([InlineKeyboardButton(text=f"🎁 Попробовать 7 дней за {PRICE_TRIAL}₽", callback_data="trial")])
-    
+        buttons.append([InlineKeyboardButton(text=f"🎁 Попробовать 7 дней за {PRICE_TRIAL}₽", callback_data="trial", style="danger")])
+
     buttons.extend([
         [InlineKeyboardButton(text="📱 5 устройств", callback_data="devices_5", style="success")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
@@ -50,20 +50,20 @@ def subscription_management_menu(key: str = None, auto_renew: bool = True) -> In
         if key
         else InlineKeyboardButton(text="🔑 Скопировать ключ", callback_data="copy_key", style="success")
     )
-    
+
     buttons = [
         [copy_btn],
         [InlineKeyboardButton(text="📖 Инструкция по подключению", url=INSTRUCTION_URL, style="success")],
     ]
-    
+
     # Show auto-renew toggle
     if auto_renew:
         buttons.append([InlineKeyboardButton(text="❌ Выключить автопродление", callback_data="disable_auto_renew")])
     else:
         buttons.append([InlineKeyboardButton(text="✅ Включить автопродление", callback_data="enable_auto_renew")])
-    
+
     buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")])
-    
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def back_to_main() -> InlineKeyboardMarkup:
