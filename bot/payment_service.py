@@ -6,6 +6,7 @@ from . import database as db
 from . import keyboards as kb
 from .marzban_api import marzban_api
 from .config import config
+from .utils import send_menu_with_logo
 
 async def process_successful_payment(
     bot: Bot, 
@@ -104,30 +105,16 @@ async def process_successful_payment(
 
         reply_markup = kb.success_payment_menu(vpn_key_to_save)
 
-        if is_background:
-            try:
-                await bot.send_message(user_id, success_text, reply_markup=reply_markup, parse_mode="Markdown")
-            except Exception as e:
-                logging.error(f"Failed to send background success message to {user_id}: {e}")
-        elif message_to_edit:
-            try:
-                if message_to_edit.photo:
-                    await message_to_edit.edit_caption(caption=success_text, reply_markup=reply_markup, parse_mode="Markdown")
-                else:
-                    await message_to_edit.edit_text(text=success_text, reply_markup=reply_markup, parse_mode="Markdown")
-            except Exception as e:
-                logging.error(f"Failed to edit message for {user_id}: {e}")
-                # Fallback: try sending a new message
-                try:
-                    await bot.send_message(user_id, success_text, reply_markup=reply_markup, parse_mode="Markdown")
-                except Exception as e2:
-                    logging.error(f"Fallback send_message also failed for {user_id}: {e2}")
-        else:
-            # No message to edit (e.g. foreground flow without context) — send directly
-            try:
-                await bot.send_message(user_id, success_text, reply_markup=reply_markup, parse_mode="Markdown")
-            except Exception as e:
-                logging.error(f"Failed to send foreground success message to {user_id}: {e}")
+        try:
+            await send_menu_with_logo(
+                bot=bot,
+                chat_id=user_id,
+                text=success_text,
+                reply_markup=reply_markup,
+                message_to_edit=message_to_edit if not is_background else None
+            )
+        except Exception as e:
+            logging.error(f"Failed to send success payment menu: {e}")
 
         return True
 

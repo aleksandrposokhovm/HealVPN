@@ -11,15 +11,11 @@ from . import keyboards as kb
 from . import database as db
 from .marzban_api import marzban_api
 from .payment_service import process_successful_payment
+from .utils import send_menu_with_logo
 
 router = Router()
 
 processed_payments_cache = {}
-LOGO_PATH = os.path.normpath(os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "assets", "logo_horizontal.png"
-))
-LOGO_FILE_ID = None
 
 WELCOME_TEXT = (
     "Вижу твой интерес! 👋 Позволь рассказать, почему HealVPN станет твоим лучшим выбором:\n\n"
@@ -33,7 +29,6 @@ WELCOME_TEXT = (
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, bot: Bot):
-    global LOGO_FILE_ID
     user = message.from_user
 
     await db.add_user(user.id, user.username, user.first_name)
@@ -43,23 +38,12 @@ async def cmd_start(message: Message, bot: Bot):
     is_active = sub[3] if sub else False
     reply_markup = kb.main_menu(is_active=is_active, trial_available=trial_avail)
 
-    if os.path.exists(LOGO_PATH) or LOGO_FILE_ID:
-        try:
-            photo = LOGO_FILE_ID if LOGO_FILE_ID else FSInputFile(LOGO_PATH)
-            sent_msg = await message.answer_photo(
-                photo=photo,
-                caption=WELCOME_TEXT,
-                reply_markup=reply_markup,
-                parse_mode="Markdown"
-            )
-
-            if not LOGO_FILE_ID:
-                LOGO_FILE_ID = sent_msg.photo[-1].file_id
-        except Exception as e:
-            logging.error(f"Error sending photo: {e}")
-            await message.answer(WELCOME_TEXT, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
-        await message.answer(WELCOME_TEXT, reply_markup=reply_markup, parse_mode="Markdown")
+    await send_menu_with_logo(
+        bot=bot,
+        chat_id=message.chat.id,
+        text=WELCOME_TEXT,
+        reply_markup=reply_markup
+    )
 
 
 @router.callback_query(F.data == "main_menu")
@@ -69,10 +53,13 @@ async def main_menu_callback(callback: CallbackQuery):
     trial_avail = await db.is_trial_available(callback.from_user.id)
     reply_markup = kb.main_menu(is_active=is_active, trial_available=trial_avail)
 
-    if callback.message.photo:
-        await callback.message.edit_caption(caption=WELCOME_TEXT, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
-        await callback.message.edit_text(text=WELCOME_TEXT, reply_markup=reply_markup, parse_mode="Markdown")
+    await send_menu_with_logo(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        text=WELCOME_TEXT,
+        reply_markup=reply_markup,
+        message_to_edit=callback.message
+    )
     await callback.answer()
 
 
@@ -88,10 +75,13 @@ async def tariffs_callback(callback: CallbackQuery):
 
     text = "💳 *Выберите количество устройств:*"
     reply_markup = kb.tariffs_menu(trial_available=trial_avail)
-    if callback.message.photo:
-        await callback.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
-        await callback.message.edit_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
+    await send_menu_with_logo(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        text=text,
+        reply_markup=reply_markup,
+        message_to_edit=callback.message
+    )
     await callback.answer()
 
 @router.callback_query(F.data == "trial")
@@ -138,14 +128,23 @@ async def trial_callback(callback: CallbackQuery):
                     "Автопродление срабатывает за 24 часа до окончания срока. Отключить его можно в любой момент в разделе «⚙️ Управление подпиской».")
             reply_markup = kb.pay_menu(payment["confirmation"]["confirmation_url"], payment['id'], is_trial=True)
 
-            if callback.message.photo:
-                await callback.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-            else:
-                await callback.message.edit_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
+            await send_menu_with_logo(
+                bot=callback.bot,
+                chat_id=callback.message.chat.id,
+                text=text,
+                reply_markup=reply_markup,
+                message_to_edit=callback.message
+            )
     except Exception as e:
         logging.error(f"Error in trial_callback: {e}")
         error_text = "❌ Произошла ошибка. Попробуйте еще раз."
-        await callback.message.answer(error_text, reply_markup=kb.back_to_main())
+        await send_menu_with_logo(
+            bot=callback.bot,
+            chat_id=callback.message.chat.id,
+            text=error_text,
+            reply_markup=kb.back_to_main(),
+            message_to_edit=callback.message
+        )
     await callback.answer()
 
 @router.callback_query(F.data == "devices_5")
@@ -185,17 +184,23 @@ async def devices_callback(callback: CallbackQuery):
                     "Отключить автопродление можно в любой момент в разделе «⚙️ Управление подпиской».")
             reply_markup = kb.pay_menu(payment["confirmation"]["confirmation_url"], payment['id'])
 
-            if callback.message.photo:
-                await callback.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-            else:
-                await callback.message.edit_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
+            await send_menu_with_logo(
+                bot=callback.bot,
+                chat_id=callback.message.chat.id,
+                text=text,
+                reply_markup=reply_markup,
+                message_to_edit=callback.message
+            )
     except Exception as e:
         logging.error(f"Error in devices_callback: {e}")
         error_text = "❌ Произошла ошибка. Попробуйте еще раз."
-        if callback.message.photo:
-            await callback.message.edit_caption(caption=error_text, reply_markup=kb.back_to_main())
-        else:
-            await callback.message.edit_text(text=error_text, reply_markup=kb.back_to_main())
+        await send_menu_with_logo(
+            bot=callback.bot,
+            chat_id=callback.message.chat.id,
+            text=error_text,
+            reply_markup=kb.back_to_main(),
+            message_to_edit=callback.message
+        )
     await callback.answer()
 
 @router.callback_query(F.data == "subscription_mgmt")
@@ -233,10 +238,13 @@ async def subscription_mgmt_callback(callback: CallbackQuery):
         text = "❌ *Подписка не активна.*\nАктивируйте её прямо сейчас, чтобы наслаждаться быстрым интернетом без границ! ✨"
         reply_markup = kb.tariffs_menu(trial_available=trial_avail)
 
-    if callback.message.photo:
-        await callback.message.edit_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
-        await callback.message.edit_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
+    await send_menu_with_logo(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        text=text,
+        reply_markup=reply_markup,
+        message_to_edit=callback.message
+    )
     await callback.answer()
 
 @router.callback_query(F.data.startswith("check_pay:"))
@@ -341,20 +349,32 @@ async def enable_auto_renew_callback(callback: CallbackQuery):
 @router.callback_query(F.data == "about")
 async def about_callback(callback: CallbackQuery):
     text = "ℹ️ *О нас*\nHealVPN — быстрый и анонимный сервис."
-    if callback.message.photo:
-        await callback.message.edit_caption(caption=text, reply_markup=kb.about_menu(), parse_mode="Markdown")
-    else:
-        await callback.message.edit_text(text=text, reply_markup=kb.about_menu(), parse_mode="Markdown")
+    await send_menu_with_logo(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        text=text,
+        reply_markup=kb.about_menu(),
+        message_to_edit=callback.message
+    )
     await callback.answer()
 
 @router.message(Command("status"))
 async def status_cmd(message: Message):
     sub = await db.get_user_subscription(message.from_user.id)
-    await message.answer(f"Статус: {'Активен' if sub and sub[3] else 'Неактивен'}")
+    await send_menu_with_logo(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        text=f"Статус: {'Активен' if sub and sub[3] else 'Неактивен'}"
+    )
 
 @router.message()
 async def save_text(message: Message):
     sub = await db.get_user_subscription(message.from_user.id)
     is_active = sub[3] if sub else False
     trial_avail = await db.is_trial_available(message.from_user.id)
-    await message.answer("Используйте кнопки меню!", reply_markup=kb.main_menu(is_active=is_active, trial_available=trial_avail))
+    await send_menu_with_logo(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        text="Используйте кнопки меню!",
+        reply_markup=kb.main_menu(is_active=is_active, trial_available=trial_avail)
+    )
