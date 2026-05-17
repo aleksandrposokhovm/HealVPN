@@ -52,5 +52,9 @@ docker-compose.override.yml
 
 # Secret keys and certificates
 *.key
-*.pem*.db
+*.pem
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
 scratch/

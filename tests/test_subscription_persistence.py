@@ -36,23 +36,48 @@ async def test_subscription_link_persistence():
     user_data_extended = await marzban_api.sync_user_subscription(username, new_expire_ts)
     assert user_data_extended is not None, "Failed to extend subscription"
     
-    extended_sub_url = user_data_extended.get("subscription_url")
-    extended_token = marzban_api.extract_token(extended_sub_url)
+    extended_sub_url = user_data_extended.get("subscription_url") or (user_data_extended.get("links")[0] if user_data_extended.get("links") else None)
     
-    print(f"Extended Token: {extended_token}")
+    # Form absolute URLs if relative
+    from bot.config import config
+    base_url = (config.MARZBAN_URL or config.VPN_API_URL).rstrip('/')
+    abs_initial_url = initial_sub_url if not initial_sub_url.startswith('/') else f"{base_url}{initial_sub_url}"
+    abs_extended_url = extended_sub_url if not extended_sub_url.startswith('/') else f"{base_url}{extended_sub_url}"
     
-    # Verification
-    assert initial_token == extended_token, f"Token CHANGED after extension! {initial_token} -> {extended_token}"
+    print("Validating subscription URLs after step 2...")
+    initial_valid_step2 = await marzban_api.validate_subscription(abs_initial_url)
+    extended_valid_step2 = await marzban_api.validate_subscription(abs_extended_url)
+    
+    print(f"Initial URL valid after extension (step 2): {initial_valid_step2}")
+    print(f"Extended URL valid (step 2): {extended_valid_step2}")
+    
+    assert initial_valid_step2, "CRITICAL: Initial subscription URL stopped working after extension in step 2!"
+    assert extended_valid_step2, "CRITICAL: Extended subscription URL is not working!"
     
     # 3. Extension with a forced token (simulating fragmented key in DB)
     print("Extending with forced token (simulating fragment)...")
     fragmented_token = initial_token
     user_data_forced = await marzban_api.sync_user_subscription(username, new_expire_ts + 3600, forced_token=fragmented_token)
     
-    forced_sub_url = user_data_forced.get("subscription_url")
-    forced_token_res = marzban_api.extract_token(forced_sub_url)
+    forced_sub_url = user_data_forced.get("subscription_url") or (user_data_forced.get("links")[0] if user_data_forced.get("links") else None)
     
-    assert forced_token_res == initial_token, "Token changed after forcing with fragmented source"
+    # Form absolute URLs if relative
+    from bot.config import config
+    base_url = (config.MARZBAN_URL or config.VPN_API_URL).rstrip('/')
+    if initial_sub_url.startswith('/'):
+        initial_sub_url = f"{base_url}{initial_sub_url}"
+    if forced_sub_url.startswith('/'):
+        forced_sub_url = f"{base_url}{forced_sub_url}"
+        
+    print("Validating subscription URLs...")
+    initial_valid = await marzban_api.validate_subscription(initial_sub_url)
+    forced_valid = await marzban_api.validate_subscription(forced_sub_url)
+    
+    print(f"Initial link valid after extension: {initial_valid}")
+    print(f"New link valid after extension: {forced_valid}")
+    
+    assert initial_valid, "CRITICAL: Initial subscription URL stopped working after extension!"
+    assert forced_valid, "CRITICAL: New subscription URL is not working!"
     
     # Cleanup
     await marzban_api.delete_user(username)

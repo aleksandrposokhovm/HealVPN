@@ -10,6 +10,7 @@ from .config import config, get_yookassa_headers
 from . import keyboards as kb
 from . import database as db
 from .marzban_api import marzban_api
+from .payment_service import process_successful_payment
 
 router = Router()
 
@@ -127,6 +128,8 @@ async def trial_callback(callback: CallbackQuery):
 
             if "id" not in payment:
                 raise Exception(f"Failed to create trial payment: {payment}")
+                
+            await db.add_pending_payment(payment["id"], callback.from_user.id, "trial_7_days", float(kb.PRICE_TRIAL))
 
             text = ("🎁 *Пробный период на 7 дней*\n\n"
                     f"Стоимость: {kb.PRICE_TRIAL} рублей.\n\n"
@@ -173,6 +176,8 @@ async def devices_callback(callback: CallbackQuery):
 
             if "id" not in payment:
                 raise Exception(f"Failed to create payment: {payment}")
+                
+            await db.add_pending_payment(payment["id"], callback.from_user.id, "1_month", float(kb.PRICE_MONTH))
 
             text = ("💳 *Подписка на 1 месяц*\n\n"
                     "После завершения оплаты в браузере нажмите кнопку «✅ Проверить оплату».\n\n"
@@ -271,119 +276,25 @@ async def check_payment_callback(callback: CallbackQuery):
             payment = response.json()
 
         if payment.get('status') == 'succeeded':
-            # 3. Подготовка данных
-            metadata = payment.get('metadata', {})
-            plan = metadata.get('plan', '1_month')
-            days = 7 if plan == 'trial_7_days' else 30
-            amount = float(payment.get('amount', {}).get('value', 0))
-            marzban_username = str(user_id)
-
-            # 4. Взаимодействие с Marzban
-            # Рассчитываем время окончания
-            existing_sub = await db.get_user_subscription(user_id)
-            
-            base_ts = now
-            if existing_sub and existing_sub[3] and existing_sub[1]:
-                sub_end = existing_sub[1].replace(tzinfo=timezone.utc) if not existing_sub[1].tzinfo else existing_sub[1]
-                base_ts = max(sub_end, now)
-
-            expire_ts = int(base_ts.timestamp()) + days * 24 * 3600
-
-            # 1. Извлекаем токен из существующей ссылки, чтобы гарантировать преемственность
-            forced_token = marzban_api.extract_token(existing_key)
-            if forced_token:
-                logging.info(f"Extracted forced_token {forced_token[:12]}... from existing key for user {user_id}")
-            elif existing_key and "vless://" in existing_key:
-                # Если это VLESS ссылка, мы не можем легко вытащить токен подписки
-                logging.info(f"Existing key for {user_id} is VLESS, skipping token extraction.")
-
-            # 2. Синхронизируем пользователя в Marzban (создаст или обновит)
-            user_response = await marzban_api.sync_user_subscription(
-                username=marzban_username,
-                expire_ts=expire_ts,
-                forced_token=forced_token
-            )
-            
-            if not user_response:
-                raise Exception(f"Failed to sync user {marzban_username} in Marzban")
-
-            # 3. Получаем актуальную ссылку из ответа Marzban
-            sub_url = user_response.get("subscription_url") or (user_response.get("links")[0] if user_response.get("links") else None)
-
-            if not sub_url:
-                raise Exception(f"No subscription URL returned for user {marzban_username}")
-
-            if sub_url.startswith('/'):
-                base_url = (config.MARZBAN_URL or config.VPN_API_URL).rstrip('/')
-                sub_url = f"{base_url}{sub_url}"
-
-            # 4. Определяем какой ключ сохранить
-            # ПРАВИЛО: Если у нас был ключ и это была ссылка на подписку, мы ОЧЕНЬ хотим ее оставить.
-            # Если Marzban вернул ту же самую ссылку (или с тем же токеном), оставляем старую.
-            
-            vpn_key_to_save = sub_url # По умолчанию берем новую
-            
-            # Пробуем вытащить токен из новой ссылки (если она есть)
-            new_token = marzban_api.extract_token(sub_url)
-            
-            # Если в ответе Marzban нет /sub/ ссылки, но мы ее нашли выше в sync_user_subscription (в links)
-            # или если мы точно знаем какой токен мы форсировали
-            actual_token = new_token or forced_token
-            
-            if existing_key and "/sub/" in existing_key:
-                # Пытаемся понять, изменился ли токен в новой ссылке по сравнению со старой
-                old_token = marzban_api.extract_token(existing_key)
-                
-                if old_token and actual_token and old_token == actual_token:
-                    # Токены совпали! Значит ссылка по сути та же. 
-                    # Оставляем существующую (она может иметь другой домен или параметры, которые юзеру привычнее)
-                    vpn_key_to_save = existing_key
-                    logging.info(f"Token matched for user {user_id}, preserving existing key: {existing_key}")
-                elif old_token and not new_token:
-                    # Если новая ссылка — не подписка, а старая была подпиской, 
-                    # и мы знаем, что токен не менялся (потому что мы его форсировали)
-                    # то ОСТАВЛЯЕМ старую ссылку.
-                    vpn_key_to_save = existing_key
-                    logging.info(f"New link is not sub, but old was. Preserving existing key for {user_id}")
-                else:
-                    logging.warning(f"Token CHANGED for user {user_id}! Old: {old_token}, New: {new_token}. Updating to new link.")
-            elif existing_key:
-                # Если старый ключ был VLESS, а новый - подписка, переходим на подписку
-                logging.info(f"Upgrading user {user_id} from VLESS to subscription link.")
-
-            success = await db.activate_subscription(
+            success = await process_successful_payment(
+                bot=callback.bot,
                 user_id=user_id,
-                plan_name="Стандарт",
-                duration_days=days,
-                vpn_key=vpn_key_to_save,
                 payment_id=payment_id,
-                amount=amount,
-                plan=plan
+                payment=payment,
+                is_background=False,
+                message_to_edit=callback.message
             )
 
             if not success:
                 # Значит платеж уже был обработан кем-то другим (race condition в БД пресечен)
+                await db.remove_pending_payment(payment_id)
                 await callback.answer("Эта оплата уже была успешно обработана. ✅", show_alert=True)
                 return
 
-            await db.reset_failed_payments(user_id)
+            await db.remove_pending_payment(payment_id)
 
-            # Сохраняем метод оплаты для автопродления
-            pm_id = payment.get("payment_method", {}).get("id")
-            if pm_id:
-                await db.save_payment_method(user_id, pm_id)
-
-            # 6. Финальное обновление кэша и интерфейса
+            # 6. Финальное обновление кэша
             processed_payments_cache[payment_id] = datetime.now(timezone.utc)
-
-            success_text = "✨ *Оплата прошла успешно!*\nВаша подписка активирована. 🚀"
-                
-            reply_markup = kb.success_payment_menu(vpn_key_to_save)
-
-            if callback.message.photo:
-                await callback.message.edit_caption(caption=success_text, reply_markup=reply_markup, parse_mode="Markdown")
-            else:
-                await callback.message.edit_text(text=success_text, reply_markup=reply_markup, parse_mode="Markdown")
 
         else:
             # Оплата еще не прошла — сбрасываем статус "в обработке", чтобы можно было нажать снова

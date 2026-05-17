@@ -9,19 +9,21 @@ from .models import User
 from . import database as db
 from .marzban_api import marzban_api
 from .config import config, get_yookassa_headers
+from .payment_service import process_successful_payment
 
 notified_cache = {}
 
-async def create_auto_payment(user_id: int, payment_method_id: str) -> dict:
+async def create_auto_payment(user_id: int, payment_method_id: str, idempotence_key: str) -> dict:
     """Create an automatic payment using saved payment method. No user interaction needed."""
     headers = get_yookassa_headers().copy()
-    headers["Idempotence-Key"] = str(uuid.uuid4())
+    headers["Idempotence-Key"] = idempotence_key
     
     data = {
         "amount": {"value": "88.00", "currency": "RUB"},
         "capture": True,
         "payment_method_id": payment_method_id,
-        "description": f"Автопродление HealVPN для пользователя {user_id}"
+        "description": f"Автопродление HealVPN для пользователя {user_id}",
+        "metadata": {"user_id": str(user_id), "plan": "auto_renew"}
     }
     
     async with httpx.AsyncClient() as client:
@@ -48,10 +50,33 @@ async def auto_renew_subscriptions(bot: Bot):
                 logging.error(f"Auto-renew skipped for {user.id} because Marzban is unreachable.")
                 continue
 
+            # Create idempotence key based on current subscription end and fail count
+            sub_end_ts = int(user.subscription_ends.timestamp())
+            idem_key = f"autorenew_{user.id}_{sub_end_ts}_{user.failed_payments}"
+
             # 1. Create auto-payment via YooKassa
-            payment = await create_auto_payment(user.id, user.payment_method_id)
-            
-            if payment.get("status") == "succeeded":
+            payment = await create_auto_payment(user.id, user.payment_method_id, idem_key)
+            status = payment.get("status")
+            payment_id = payment.get("id")
+
+            if payment_id:
+                # Add to pending payment queue for background resilience
+                await db.add_pending_payment(payment_id, user.id, "auto_renew", 88.0)
+
+            if status == "pending" and payment_id:
+                # Poll a few times just in case it finishes quickly
+                import asyncio
+                for _ in range(3):
+                    await asyncio.sleep(2)
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.get(f"https://api.yookassa.ru/v3/payments/{payment_id}", headers=get_yookassa_headers())
+                        if resp.status_code == 200:
+                            payment = resp.json()
+                            status = payment.get("status")
+                            if status != "pending":
+                                break
+
+            if status == "succeeded":
                 # Ensure timezone awareness to prevent incorrect local-time timestamp conversions
                 if not user.subscription_ends.tzinfo:
                     user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
@@ -96,9 +121,25 @@ async def auto_renew_subscriptions(bot: Bot):
                     logging.info(f"Auto-renew: new link not sub, but old was. Preserving for {user.id}")
 
                 # 4. Extend in DB
-                await db.activate_subscription(user.id, "Стандарт", 30, new_key)
+                success = await db.activate_subscription(
+                    user_id=user.id, 
+                    plan_name="Стандарт", 
+                    duration_days=30, 
+                    vpn_key=new_key,
+                    payment_id=payment_id,
+                    amount=float((payment.get("amount") or {}).get("value", 88.0)),
+                    plan="auto_renew"
+                )
+                
+                if not success:
+                    logging.info(f"Auto-renew payment {payment_id} already processed for user {user.id}")
+                    if payment_id:
+                        await db.remove_pending_payment(payment_id)
+                    continue
 
                 await db.reset_failed_payments(user.id)
+                if payment_id:
+                    await db.remove_pending_payment(payment_id)
                 
                 # 4. Notify user
                 try:
@@ -113,7 +154,9 @@ async def auto_renew_subscriptions(bot: Bot):
                 
                 logging.info(f"Auto-renewed subscription for user {user.id}")
             
-            elif payment.get("status") in ["canceled", "pending_capture"]:
+            elif status == "canceled":
+                if payment_id:
+                    await db.remove_pending_payment(payment_id)
                 # Payment failed — handle based on attempt number
                 new_fail_count = await db.increment_failed_payments(user.id)
                 
@@ -244,6 +287,54 @@ async def notify_trial_available_again(bot: Bot):
         except Exception:
             pass
 
+async def check_pending_payments(bot: Bot):
+    """Background job: check pending YooKassa payments up to 25 mins old."""
+    pending_payments = await db.get_pending_payments(max_age_minutes=25)
+    if not pending_payments:
+        return
+        
+    headers = get_yookassa_headers()
+    
+    async with httpx.AsyncClient() as client:
+        for pp in pending_payments:
+            try:
+                response = await client.get(f"https://api.yookassa.ru/v3/payments/{pp.payment_id}", headers=headers)
+                if response.status_code != 200:
+                    logging.error(f"YooKassa API Error checking pending payment {pp.payment_id}: {response.status_code}")
+                    continue
+                    
+                payment = response.json()
+                status = payment.get("status")
+                
+                if status == "succeeded":
+                    logging.info(f"Pending payment {pp.payment_id} succeeded! Activating...")
+                    success = await process_successful_payment(
+                        bot=bot,
+                        user_id=pp.user_id,
+                        payment_id=pp.payment_id,
+                        payment=payment,
+                        is_background=True
+                    )
+                    # Always remove from pending queue — either activated or already processed
+                    await db.remove_pending_payment(pp.payment_id)
+                    if success:
+                        logging.info(f"Background payment {pp.payment_id} activated for user {pp.user_id}")
+                    else:
+                        logging.info(f"Background payment {pp.payment_id} was already processed (race condition caught)")
+                elif status == "canceled":
+                    # Payment definitively failed — remove from queue
+                    logging.info(f"Pending payment {pp.payment_id} canceled, removing from queue")
+                    await db.remove_pending_payment(pp.payment_id)
+                elif status == "waiting_for_capture":
+                    # 2-stage payment: needs manual capture — leave in queue, log only
+                    logging.info(f"Pending payment {pp.payment_id} waiting_for_capture — leaving in queue")
+                # else: still "pending" — will be rechecked next cycle
+            except Exception as e:
+                logging.error(f"Error checking pending payment {pp.payment_id}: {e}", exc_info=True)
+                
+    # Clean up very old payments that stuck
+    await db.cleanup_old_pending_payments(max_age_minutes=30)
+
 def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     
@@ -257,6 +348,16 @@ def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
         minutes=15,
         next_run_time=now,
         id='deactivate_expired'
+    )
+    
+    # Check pending payments
+    scheduler.add_job(
+        check_pending_payments,
+        'interval',
+        seconds=60,
+        args=[bot],
+        next_run_time=now + timedelta(seconds=5),
+        id='check_pending_payments'
     )
     
     # Auto-renew subscriptions

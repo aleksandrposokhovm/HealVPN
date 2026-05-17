@@ -136,6 +136,8 @@ class MarzbanAPI:
             elif response.status_code == 401:
                 logging.error("Marzban auth failed after retry")
                 return None
+            elif response.status_code == 404:
+                return None
             response.raise_for_status()
             return response.json()
         except Exception as e:

@@ -1,13 +1,27 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy import select, update
-from .models import Base, User, ProcessedPayment
+from sqlalchemy import select, update, event
+from sqlalchemy.exc import IntegrityError
+from .models import Base, User, ProcessedPayment, PendingPayment
 from .config import config
 from datetime import datetime, timezone, timedelta
 import logging
 import time
 
-engine = create_async_engine(config.DATABASE_URL, echo=False)
+# Optimize engine configuration for SQLite: timeout to prevent lockouts, WAL mode for concurrent write-read
+connect_args = {}
+if config.DATABASE_URL.startswith("sqlite"):
+    connect_args["timeout"] = 30.0
+
+engine = create_async_engine(config.DATABASE_URL, echo=False, connect_args=connect_args)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+if config.DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 async def init_db():
     async with engine.begin() as conn:
@@ -61,66 +75,80 @@ async def activate_subscription(user_id: int, plan_name: str, duration_days: int
     Activates or extends a subscription. 
     If payment_id is provided, also records it in ProcessedPayment table within the same transaction.
     Uses with_for_update() to prevent race conditions.
+    Returns True if activated, False if payment was already processed (idempotent).
     """
-    async with async_session() as session:
-        async with session.begin():
-            # Use with_for_update() to lock the user row until the transaction commits
-            result = await session.execute(
-                select(User).where(User.id == user_id).with_for_update()
-            )
-            user = result.scalars().first()
-            
-            if not user:
-                user = User(id=user_id, username=str(user_id), first_name="User")
-                session.add(user)
-                # No need to commit yet, sqlalchemy will handle the sequence
-            
-            # Double check if payment was already processed by another task just in case
-            if payment_id:
-                check_pay = await session.execute(
-                    select(ProcessedPayment).where(ProcessedPayment.payment_id == payment_id)
-                )
-                if check_pay.scalars().first():
-                    logging.warning(f"Payment {payment_id} already processed, skipping activation.")
-                    return False
+    # Fast pre-check outside transaction to avoid unnecessary locking
+    if payment_id and await is_payment_processed(payment_id):
+        logging.warning(f"Payment {payment_id} already processed (pre-check), skipping activation.")
+        return False
 
-            now = datetime.now(timezone.utc)
-            
-            if user.subscription_ends:
-                if not user.subscription_ends.tzinfo:
-                    user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
-                if user.subscription_ends > now:
-                    start_from = user.subscription_ends
+    async with async_session() as session:
+        try:
+            async with session.begin():
+                # Lock the user row to prevent concurrent activations for same user
+                result = await session.execute(
+                    select(User).where(User.id == user_id).with_for_update(skip_locked=False)
+                )
+                user = result.scalars().first()
+                
+                if not user:
+                    user = User(id=user_id, username=str(user_id), first_name="User")
+                    session.add(user)
+                
+                # Double-check inside transaction (prevents TOCTOU race)
+                if payment_id:
+                    check_pay = await session.execute(
+                        select(ProcessedPayment).where(ProcessedPayment.payment_id == payment_id)
+                    )
+                    if check_pay.scalars().first():
+                        logging.warning(f"Payment {payment_id} already processed (in-tx check), skipping activation.")
+                        # Raise to abort session.begin() cleanly — no commit
+                        raise _AlreadyProcessed()
+
+                now = datetime.now(timezone.utc)
+                
+                if user.subscription_ends:
+                    if not user.subscription_ends.tzinfo:
+                        user.subscription_ends = user.subscription_ends.replace(tzinfo=timezone.utc)
+                    if user.subscription_ends > now:
+                        start_from = user.subscription_ends
+                    else:
+                        start_from = now
                 else:
                     start_from = now
-            else:
-                start_from = now
+                    
+                user.subscription_ends = start_from + timedelta(days=duration_days)
+                user.is_active = True
+                user.vpn_key = vpn_key
+                user.available_devices = 5
+                user.last_payment_date = now
                 
-            user.subscription_ends = start_from + timedelta(days=duration_days)
-            user.is_active = True
-            user.vpn_key = vpn_key
-            user.available_devices = 5
-            user.last_payment_date = now
-            
-            if duration_days == 7:
-                user.last_trial_date = now
-            
-            # Record the payment ID persistently
-            if payment_id:
-                proc_payment = ProcessedPayment(
-                    payment_id=payment_id,
-                    user_id=user_id,
-                    amount=amount,
-                    plan=plan,
-                    processed_at=now
-                )
-                session.add(proc_payment)
-            
-            # Commit happens automatically at the end of 'async with session.begin()'
+                if duration_days == 7:
+                    user.last_trial_date = now
+                
+                if payment_id:
+                    proc_payment = ProcessedPayment(
+                        payment_id=payment_id,
+                        user_id=user_id,
+                        amount=amount,
+                        plan=plan,
+                        processed_at=now
+                    )
+                    session.add(proc_payment)
+                
+        except _AlreadyProcessed:
+            return False
+        except IntegrityError:
+            logging.warning(f"Payment {payment_id} already processed (IntegrityError), skipping activation.")
+            return False
             
         if user_id in sub_cache:
             del sub_cache[user_id]
         return True
+
+class _AlreadyProcessed(Exception):
+    """Internal sentinel to abort a transaction cleanly when payment is duplicate."""
+    pass
 
 async def is_payment_processed(payment_id: str) -> bool:
     """Check if payment ID already exists in processed_payments table."""
@@ -182,8 +210,8 @@ async def get_users_for_auto_renew():
     """
     Find users for auto-renewal based on three attempts:
     1. 24 hours before (failed_payments == 0)
-    2. 12 hours before (failed_payments == 1)
-    3. 30 minutes before (failed_payments == 2)
+    2. 12 hours before (failed_payments <= 1) — self-healing if 24h attempt was missed
+    3. 30 minutes before (failed_payments <= 2) — self-healing if 24h/12h attempts were missed
     """
     async with async_session() as session:
         now = datetime.now(timezone.utc)
@@ -202,8 +230,8 @@ async def get_users_for_auto_renew():
                 User.payment_method_id.isnot(None),
                 (
                     ((User.subscription_ends <= now + timedelta(hours=25)) & (User.subscription_ends > now + timedelta(hours=23)) & (User.failed_payments == 0)) |
-                    ((User.subscription_ends <= now + timedelta(hours=13)) & (User.subscription_ends > now + timedelta(hours=11)) & (User.failed_payments == 1)) |
-                    ((User.subscription_ends <= now + timedelta(hours=1)) & (User.subscription_ends > now) & (User.failed_payments == 2))
+                    ((User.subscription_ends <= now + timedelta(hours=13)) & (User.subscription_ends > now + timedelta(hours=11)) & (User.failed_payments <= 1)) |
+                    ((User.subscription_ends <= now + timedelta(hours=1)) & (User.subscription_ends > now) & (User.failed_payments <= 2))
                 )
             )
         )
@@ -308,3 +336,51 @@ async def update_subscription_date(user_id: int, expiry_date: datetime):
                 del sub_cache[user_id]
             return True
     return False
+
+async def add_pending_payment(payment_id: str, user_id: int, plan: str, amount: float):
+    """Add a payment to the pending queue for background polling."""
+    async with async_session() as session:
+        result = await session.execute(select(PendingPayment).where(PendingPayment.payment_id == payment_id))
+        if not result.scalars().first():
+            pp = PendingPayment(payment_id=payment_id, user_id=user_id, plan=plan, amount=amount)
+            session.add(pp)
+            await session.commit()
+
+async def get_pending_payments(max_age_minutes: int = 25):
+    """Get pending payments created within the last max_age_minutes, excluding already-processed ones."""
+    from sqlalchemy import not_, exists
+    async with async_session() as session:
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=max_age_minutes)
+        # Exclude payments that have already been processed — prevents redundant API calls
+        already_processed = select(ProcessedPayment.payment_id).where(
+            ProcessedPayment.payment_id == PendingPayment.payment_id
+        )
+        result = await session.execute(
+            select(PendingPayment).where(
+                PendingPayment.created_at >= cutoff,
+                not_(exists(already_processed))
+            )
+        )
+        return result.scalars().all()
+
+async def remove_pending_payment(payment_id: str):
+    """Remove a pending payment from the queue."""
+    async with async_session() as session:
+        result = await session.execute(select(PendingPayment).where(PendingPayment.payment_id == payment_id))
+        pp = result.scalars().first()
+        if pp:
+            await session.delete(pp)
+            await session.commit()
+
+async def cleanup_old_pending_payments(max_age_minutes: int = 30):
+    """Delete pending payments older than max_age_minutes."""
+    async with async_session() as session:
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=max_age_minutes)
+        result = await session.execute(
+            select(PendingPayment).where(PendingPayment.created_at < cutoff)
+        )
+        for pp in result.scalars().all():
+            await session.delete(pp)
+        await session.commit()
