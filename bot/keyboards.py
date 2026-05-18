@@ -33,10 +33,11 @@ def tariffs_menu(trial_available=False) -> InlineKeyboardMarkup:
 def pay_menu(payment_url: str, payment_id: str, is_trial=False) -> InlineKeyboardMarkup:
     """Menu with payment link and verification button."""
     text = f"💳 Оплатить 7 дней за {PRICE_TRIAL} ₽" if is_trial else f"💳 Оплатить 1 месяц за {PRICE_MONTH} ₽"
+    back_callback = "main_menu" if is_trial else "tariffs"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=text, url=payment_url, style="success")],
         [InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_pay:{payment_id}", style="success")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="tariffs")]
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=back_callback)]
     ])
 
 def subscription_management_menu(key: str = None, auto_renew: bool = True) -> InlineKeyboardMarkup:
