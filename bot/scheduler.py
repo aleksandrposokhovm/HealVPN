@@ -19,7 +19,7 @@ async def create_auto_payment(user_id: int, payment_method_id: str, idempotence_
     headers["Idempotence-Key"] = idempotence_key
     
     data = {
-        "amount": {"value": "88.00", "currency": "RUB"},
+        "amount": {"value": "111.00", "currency": "RUB"},
         "capture": True,
         "payment_method_id": payment_method_id,
         "description": f"Автопродление HealVPN для пользователя {user_id}",
@@ -61,7 +61,7 @@ async def auto_renew_subscriptions(bot: Bot):
 
             if payment_id:
                 # Add to pending payment queue for background resilience
-                await db.add_pending_payment(payment_id, user.id, "auto_renew", 88.0)
+                await db.add_pending_payment(payment_id, user.id, "auto_renew", 111.0)
 
             if status == "pending" and payment_id:
                 # Poll a few times just in case it finishes quickly
@@ -127,7 +127,7 @@ async def auto_renew_subscriptions(bot: Bot):
                     duration_days=30, 
                     vpn_key=new_key,
                     payment_id=payment_id,
-                    amount=float((payment.get("amount") or {}).get("value", 88.0)),
+                    amount=float((payment.get("amount") or {}).get("value", 111.0)),
                     plan="auto_renew"
                 )
                 
@@ -146,7 +146,7 @@ async def auto_renew_subscriptions(bot: Bot):
                     await bot.send_message(
                         user.id,
                         "✅ *Подписка автоматически продлена* на 30 дней!\n"
-                        "💳 Списано: 88 ₽",
+                        "💳 Списано: 111 ₽",
                         parse_mode="Markdown"
                     )
                 except Exception:

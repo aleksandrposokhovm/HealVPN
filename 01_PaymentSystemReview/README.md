@@ -37,7 +37,7 @@
    - **Решение**: Заменено на `payment.get('metadata') or {}`.
 
 2. **Безопасное чтение `amount` в [scheduler.py](file:///Users/aleksandrposokhov/Life/HealVPN/bot/scheduler.py)**:
-   - Заменено на `(payment.get("amount") or {}).get("value", 88.0)`.
+   - Заменено на `(payment.get("amount") or {}).get("value", 111.0)`.
 
 3. **Мьютекс и оптимизация блокировок SQLite в [database.py](file:///Users/aleksandrposokhov/Life/HealVPN/bot/database.py)**:
    - При высокой конкуренции фоновых проверок платежей и ручных нажатий кнопок SQLite мог вызывать ошибку `database is locked`.

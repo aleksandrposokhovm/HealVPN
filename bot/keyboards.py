@@ -5,7 +5,7 @@ INSTRUCTION_URL = "https://teletype.in/@aleksandrpos/GWmBr-MmbsK"
 CHANNEL_URL = "https://t.me/HealVPN"
 SUPPORT_URL = "https://t.me/heal_vpn_support"
 PRICE_TRIAL = 11
-PRICE_MONTH = 88
+PRICE_MONTH = 111
 
 def main_menu(is_active=False, trial_available=False) -> InlineKeyboardMarkup:
     """Main menu of the bot."""

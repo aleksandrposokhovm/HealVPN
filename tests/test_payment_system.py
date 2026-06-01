@@ -112,7 +112,7 @@ async def test_is_payment_processed():
     pid = "proc_pay_002"
 
     assert_eq(await db.is_payment_processed(pid), False, "Before activation")
-    await db.activate_subscription(1002, "Standard", 30, "key://x", pid, 88.0, "1_month")
+    await db.activate_subscription(1002, "Standard", 30, "key://x", pid, 111.0, "1_month")
     assert_eq(await db.is_payment_processed(pid), True, "After activation")
 
 
@@ -124,9 +124,9 @@ async def test_idempotency():
     await db.add_user(1003, "user3", "User Three")
     pid = "idem_pay_003"
 
-    r1 = await db.activate_subscription(1003, "Standard", 30, "key://a", pid, 88.0, "1_month")
-    r2 = await db.activate_subscription(1003, "Standard", 30, "key://b", pid, 88.0, "1_month")
-    r3 = await db.activate_subscription(1003, "Standard", 30, "key://c", pid, 88.0, "1_month")
+    r1 = await db.activate_subscription(1003, "Standard", 30, "key://a", pid, 111.0, "1_month")
+    r2 = await db.activate_subscription(1003, "Standard", 30, "key://b", pid, 111.0, "1_month")
+    r3 = await db.activate_subscription(1003, "Standard", 30, "key://c", pid, 111.0, "1_month")
 
     assert_eq(r1, True, "Idempotency: first call")
     assert_eq(r2, False, "Idempotency: second call")
@@ -151,7 +151,7 @@ async def test_subscription_extension():
         user.is_active = True
         await session.commit()
 
-    await db.activate_subscription(1004, "Standard", 30, "key://ext", "ext_pay_004", 88.0, "1_month")
+    await db.activate_subscription(1004, "Standard", 30, "key://ext", "ext_pay_004", 111.0, "1_month")
 
     sub = await db.get_user_subscription(1004)
     expected_end = future + timedelta(days=30)
@@ -187,7 +187,7 @@ async def test_pending_payment_crud():
     await clear_tables()
     pid = "pend_pay_006"
 
-    await db.add_pending_payment(pid, 1006, "1_month", 88.0)
+    await db.add_pending_payment(pid, 1006, "1_month", 111.0)
     payments = await db.get_pending_payments(max_age_minutes=60)
     assert_eq(len(payments), 1, "Pending: add")
     assert_eq(payments[0].payment_id, pid, "Pending: correct id")
@@ -205,8 +205,8 @@ async def test_pending_excludes_processed():
     await db.add_user(1007, "user7", "User Seven")
     pid = "proc_pend_007"
 
-    await db.add_pending_payment(pid, 1007, "1_month", 88.0)
-    await db.activate_subscription(1007, "Standard", 30, "key://x", pid, 88.0, "1_month")
+    await db.add_pending_payment(pid, 1007, "1_month", 111.0)
+    await db.activate_subscription(1007, "Standard", 30, "key://x", pid, 111.0, "1_month")
 
     # get_pending_payments must NOT return already-processed payment
     payments = await db.get_pending_payments(max_age_minutes=60)
@@ -221,8 +221,8 @@ async def test_pending_no_duplicate():
     await clear_tables()
     pid = "dup_pend_008"
 
-    await db.add_pending_payment(pid, 1008, "1_month", 88.0)
-    await db.add_pending_payment(pid, 1008, "1_month", 88.0)  # duplicate
+    await db.add_pending_payment(pid, 1008, "1_month", 111.0)
+    await db.add_pending_payment(pid, 1008, "1_month", 111.0)  # duplicate
 
     payments = await db.get_pending_payments(max_age_minutes=60)
     count = sum(1 for p in payments if p.payment_id == pid)
@@ -239,7 +239,7 @@ async def test_pending_cleanup():
     # Inject old pending payment directly
     old_time = datetime.now(timezone.utc) - timedelta(minutes=35)
     async with async_session() as session:
-        session.add(PendingPayment(payment_id=pid, user_id=1009, plan="1_month", amount=88.0, created_at=old_time))
+        session.add(PendingPayment(payment_id=pid, user_id=1009, plan="1_month", amount=111.0, created_at=old_time))
         await session.commit()
 
     await db.cleanup_old_pending_payments(max_age_minutes=30)
@@ -358,7 +358,7 @@ async def test_cache_invalidation():
     await db.get_user_subscription(5001)
     assert 5001 in db.sub_cache, "Cache: should be populated"
 
-    await db.activate_subscription(5001, "Standard", 30, "key://cache", "cache_pay_001", 88.0, "1_month")
+    await db.activate_subscription(5001, "Standard", 30, "key://cache", "cache_pay_001", 111.0, "1_month")
     assert 5001 not in db.sub_cache, "Cache: must be invalidated after activation"
 
 
@@ -374,7 +374,7 @@ async def test_payment_service_background_notification():
 
     fake_payment = {
         "metadata": {"plan": "1_month"},
-        "amount": {"value": "88.00"},
+        "amount": {"value": "111.00"},
         "payment_method": {"id": "pm_test_001"},
         "status": "succeeded"
     }
@@ -428,7 +428,7 @@ async def test_payment_service_duplicate():
 
     fake_payment = {
         "metadata": {"plan": "1_month"},
-        "amount": {"value": "88.00"},
+        "amount": {"value": "111.00"},
         "payment_method": {},
         "status": "succeeded"
     }
@@ -553,7 +553,7 @@ async def test_auto_renew_background_resilience():
     fake_pending_payment = {
         "id": "pay_res_pending_001",
         "status": "pending",
-        "amount": {"value": "88.00"},
+        "amount": {"value": "111.00"},
         "payment_method": {"id": "pm_res_001"}
     }
 
@@ -561,7 +561,7 @@ async def test_auto_renew_background_resilience():
         "id": "pay_res_pending_001",
         "status": "succeeded",
         "metadata": {"user_id": "9001", "plan": "auto_renew"},
-        "amount": {"value": "88.00"},
+        "amount": {"value": "111.00"},
         "payment_method": {"id": "pm_res_001"}
     }
 
@@ -653,7 +653,7 @@ async def test_payment_service_missing_metadata():
 
     fake_payment = {
         "metadata": None,
-        "amount": {"value": "88.00"},
+        "amount": {"value": "111.00"},
         "payment_method": {"id": "pm_meta_test"},
         "status": "succeeded"
     }
@@ -770,7 +770,7 @@ async def test_failed_payments_lifecycle():
     fake_canceled_payment = {
         "id": "pay_canceled_001",
         "status": "canceled",
-        "amount": {"value": "88.00"}
+        "amount": {"value": "111.00"}
     }
 
     with patch("bot.scheduler.create_auto_payment", AsyncMock(return_value=fake_canceled_payment)), \
@@ -837,7 +837,7 @@ async def test_race_condition_manual_vs_background():
     payment_id = "race_m_bg_pay_id"
 
     # Add to pending payments
-    await db.add_pending_payment(payment_id, 10023, "1_month", 88.0)
+    await db.add_pending_payment(payment_id, 10023, "1_month", 111.0)
 
     mock_bot = MagicMock()
     mock_bot.send_message = AsyncMock(return_value=True)
@@ -846,7 +846,7 @@ async def test_race_condition_manual_vs_background():
         "id": payment_id,
         "status": "succeeded",
         "metadata": {"user_id": "10023", "plan": "1_month"},
-        "amount": {"value": "88.00"},
+        "amount": {"value": "111.00"},
         "payment_method": {"id": "pm_race_m_bg"}
     }
 
@@ -1001,8 +1001,8 @@ async def test_check_pending_payments_resilience():
     await clear_tables()
     
     # Add two pending payments
-    await db.add_pending_payment("pay_res_28_1", 28001, "1_month", 88.0)
-    await db.add_pending_payment("pay_res_28_2", 28002, "1_month", 88.0)
+    await db.add_pending_payment("pay_res_28_1", 28001, "1_month", 111.0)
+    await db.add_pending_payment("pay_res_28_2", 28002, "1_month", 111.0)
     
     # Simulate YooKassa returning waiting_for_capture and an HTTP error
     class FakeResponse:
